@@ -10,8 +10,36 @@ guangya:
 sources:
   type: web                       # web（推荐，公开频道网页抓取，零风控）/ userbot（账号实时监听）
   channels:
-    - ysh365                      # 公开频道用户名（去掉 @，不要带 t.me/）
-    - seedhub_cc                  # 想加更多？直接填这里，或交给 discovery 自动发现
+    # === 精选影视资源频道（28 个，已实测可出磁力/迅雷/电驴链接）===
+    - ysh365
+    - seedhub_cc
+    - tubeget
+    - yunpanpan
+    - gdsharing
+    - Aliyundrive_Share_Channel
+    - Aliyun_4K_Movies
+    - Plus_Movie_Best
+    - zaproshare
+    - XiangxiuNB
+    - MovieAnywhere
+    - CurlyMouse
+    - alistshare
+    - yszylm
+    - woniubuchuiniu
+    - jlpahz
+    - HLWYS
+    - beyondHD
+    - TVbox888
+    - alyp_1
+    - doubanchannel
+    - YXHMd
+    - zerodemovie
+    - mytvseries
+    - cinephiliajam
+    - yunpanshare
+    - alikuake
+    - abskoop
+    # 想加更多？直接填这里，或交给 discovery 自动发现（默认关闭，避免频道无限膨胀）
   poll_interval: 120              # 网页模式轮询间隔（秒，最小 30）
 
 # ===== 过滤规则 =====
