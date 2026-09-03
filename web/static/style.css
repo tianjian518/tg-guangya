@@ -119,6 +119,7 @@ input[type=text], input[type=number], select, textarea {
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 label { display: block; color: var(--text-dim); margin: 12px 0 6px; font-size: 13px; }
 .hint { color: var(--text-dim); font-size: 12px; margin-top: 5px; line-height: 1.5; }
+.err-line { color: var(--err); font-size: 13px; margin: 8px 0 0; line-height: 1.5; word-break: break-word; min-height: 0; }
 
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px; }

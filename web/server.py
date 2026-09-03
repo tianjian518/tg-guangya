@@ -469,6 +469,7 @@ def login_start():
     try:
         info = client.start_qr_login(qr_path=str(BASE / "web" / "login_qr.png"))
     except GuangyaError as exc:
+        log.error("扫码登录启动失败: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc))
     qr = _qr_data_url(info["qr_url"])
     _login_sessions[info["device_code"]] = {

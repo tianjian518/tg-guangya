@@ -616,6 +616,7 @@ function openLoginModal() {
       <div class="modal">
         <h3>光鸭扫码登录</h3>
         <div class="qr-box"><img id="qr-img" alt="二维码" /></div>
+        <p id="qr-err" class="err-line"></p>
         <p class="hint">用「光鸭云盘」App 扫码并确认授权。二维码 2 分钟内有效。</p>
         <p class="row"><a id="qr-link" class="pill" target="_blank" rel="noopener">🔗 打不开二维码？点此打开链接</a></p>
         <div class="row" style="justify-content:space-between;margin-top:8px">
@@ -645,7 +646,16 @@ function openLoginModal() {
         else if (r.status === "expired") { st.className = "badge err"; st.innerHTML = `<span class="dot"></span> 二维码过期`; clearInterval(iv); }
       } catch (e) { /* 忽略轮询抖动 */ }
     }, Math.max(2000, info.interval * 1000));
-  }).catch((e) => errToast(e));
+  }).catch((e) => {
+    const msg = e.message || String(e);
+    const errEl = $("#qr-err");
+    if (errEl) { errEl.textContent = "⚠️ 登录失败：" + msg; }
+    const st = $("#qr-status");
+    if (st) { st.className = "badge err"; st.innerHTML = `<span class="dot"></span> 登录失败`; }
+    const box = $("#qr-img");
+    if (box) { box.alt = "生成二维码失败：" + msg; box.removeAttribute("src"); }
+    errToast(e);
+  });
   $("#qr-close").addEventListener("click", () => closeModal(root));
 }
 function closeModal(root) { root.innerHTML = ""; }
