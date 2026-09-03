@@ -148,7 +148,9 @@ class GuangyaClient:
         interval = int(data.get("interval") or 5)
         expires_in = int(data.get("expires_in") or 120)
         if not device_code or not qr_url:
-            raise GuangyaError("光鸭设备码接口返回不完整，无法生成二维码")
+            raise GuangyaError(
+                "光鸭设备码接口返回不完整，无法生成二维码；接口返回: " + str(data)[:300]
+            )
         try:
             import qrcode
 
@@ -232,14 +234,39 @@ class GuangyaClient:
             headers["Authorization"] = "Bearer " + self._access
         return headers
 
-    def _post(self, base: str, path: str, body: dict, auth: bool = True, retry: bool = True) -> Any:
+    def build_account_headers(self) -> dict:
+        """账户域（登录/设备码/刷新令牌）专用请求头。
+
+        与 LitePan drivers/Guangya transport.go 的 buildAccountHeaders 对齐：
+        光鸭账户接口依赖 X-Device-Sign / X-Device-Id 等客户端指纹头，缺少会导致
+        设备码接口返回空 data（表现就是「返回不完整，无法生成二维码」）。
+        """
+        return {
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+            "X-Device-Model": "chrome%2F147.0.0.0",
+            "X-Device-Name": "PC-Chrome",
+            "X-Device-Sign": "wdi10." + self.device_id + "x" * 32,
+            "X-Net-Work-Type": "NONE",
+            "X-OS-Version": "MacIntel",
+            "X-Platform-Version": "1",
+            "X-Protocol-Version": "301",
+            "X-Provider-Name": "NONE",
+            "X-SDK-Version": "9.0.2",
+            "X-Client-Id": self.client_id,
+            "X-Client-Version": "0.0.1",
+            "X-Device-Id": self.device_id,
+        }
+
+    def _post(self, base: str, path: str, body: dict, auth: bool = True, retry: bool = True, headers: dict | None = None) -> Any:
         url = base + path
+        req_headers = dict(headers) if headers is not None else self._api_headers(auth)
         resp = self._session.post(
-            url, json=body, headers=self._api_headers(auth), timeout=self.timeout
+            url, json=body, headers=req_headers, timeout=self.timeout
         )
         if resp.status_code in (401, 403) and auth and retry and self._refresh:
             self.refresh()  # 令牌过期，刷一次重试
-            return self._post(base, path, body, auth=auth, retry=False)
+            return self._post(base, path, body, auth=auth, retry=False, headers=self._api_headers(auth))
         if resp.status_code >= 400:
             raise GuangyaError(f"光鸭 HTTP {resp.status_code}: {resp.text[:200]}")
         try:
@@ -252,7 +279,7 @@ class GuangyaClient:
         return envelope.get("data")
 
     def _account_post(self, path: str, body: dict, auth: bool = False) -> Any:
-        return self._post(ACCOUNT_BASE, path, body, auth=auth)
+        return self._post(ACCOUNT_BASE, path, body, auth=False, headers=self.build_account_headers())
 
     def _api_post(self, path: str, body: dict) -> Any:
         self.ensure_token()
@@ -380,7 +407,10 @@ class GuangyaClient:
 
     def me(self) -> dict:
         """获取当前登录的账号信息（昵称、空间等）。"""
-        return self._account_post("/v1/user/me", {}, auth=True) or {}
+        h = self.build_account_headers()
+        if self._access:
+            h["Authorization"] = "Bearer " + self._access
+        return self._post(ACCOUNT_BASE, "/v1/user/me", {}, auth=False, headers=h) or {}
 
     def delete_file(self, parent_id: str, file_id: str) -> None:
         """删除网盘里的文件/目录（用于洗版时替换旧版本）。

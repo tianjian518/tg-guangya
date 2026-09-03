@@ -43,37 +43,30 @@ REGION_NAMES = {
 # 扁平结构：目录名直接体现「地区 + 类型」
 DEFAULT_MAPPING: dict[tuple[str, str], str] = {
     (KIND_MOVIE, REGION_CN): "华语电影",
-    (KIND_MOVIE, REGION_HKTW): "港台电影",
     (KIND_MOVIE, REGION_WEST): "欧美电影",
     (KIND_MOVIE, REGION_JPKR): "日韩电影",
     (KIND_MOVIE, REGION_OTHER): "其他电影",
     (KIND_TV, REGION_CN): "国产剧",
-    (KIND_TV, REGION_HKTW): "港台剧",
     (KIND_TV, REGION_WEST): "欧美剧",
     (KIND_TV, REGION_JPKR): "日韩剧",
     (KIND_TV, REGION_OTHER): "其他剧集",
     (KIND_ANIME, REGION_CN): "国产动漫",
-    (KIND_ANIME, REGION_HKTW): "港台动漫",
     (KIND_ANIME, REGION_WEST): "欧美动漫",
     (KIND_ANIME, REGION_JPKR): "日本动漫",
     (KIND_ANIME, REGION_OTHER): "其他动漫",
     (KIND_DOC, REGION_CN): "纪录片",
-    (KIND_DOC, REGION_HKTW): "纪录片",
     (KIND_DOC, REGION_WEST): "纪录片",
     (KIND_DOC, REGION_JPKR): "纪录片",
     (KIND_DOC, REGION_OTHER): "纪录片",
     (KIND_VARIETY, REGION_CN): "综艺",
-    (KIND_VARIETY, REGION_HKTW): "综艺",
     (KIND_VARIETY, REGION_WEST): "综艺",
     (KIND_VARIETY, REGION_JPKR): "综艺",
     (KIND_VARIETY, REGION_OTHER): "综艺",
     (KIND_MUSIC, REGION_CN): "演唱会",
-    (KIND_MUSIC, REGION_HKTW): "演唱会",
     (KIND_MUSIC, REGION_WEST): "演唱会",
     (KIND_MUSIC, REGION_JPKR): "演唱会",
     (KIND_MUSIC, REGION_OTHER): "演唱会",
     (KIND_OTHER, REGION_CN): "其他",
-    (KIND_OTHER, REGION_HKTW): "其他",
     (KIND_OTHER, REGION_WEST): "其他",
     (KIND_OTHER, REGION_JPKR): "其他",
     (KIND_OTHER, REGION_OTHER): "其他",
@@ -118,8 +111,8 @@ _MOVIE_RULES: list[tuple[re.Pattern, str, int]] = [
 ]
 
 _REGION_RULES: list[tuple[re.Pattern, str, int]] = [
-    # 港台
-    (re.compile(r"粤语|广东话|繁体|繁中|香港|台湾|hktv|tvb|港剧|台剧|cantonese|hong\s*kong|taiwan", re.I), REGION_HKTW, 4),
+    # 港台：直接并入华语（不单独设类，港台影视统一归入华语目录）
+    (re.compile(r"粤语|广东话|繁体|繁中|香港|台湾|hktv|tvb|港剧|台剧|cantonese|hong\s*kong|taiwan", re.I), REGION_CN, 4),
     # 日韩
     (re.compile(r"日语|韩语|韩剧|日剧|日本|韩国|日影|韩影|jpn|kor|日语中字|韩语中字|日版|韩版|首尔|东京|korean|japanese", re.I), REGION_JPKR, 4),
     # 欧美

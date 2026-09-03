@@ -66,12 +66,10 @@ organize:
     "movie:cn": 华语电影
     "movie:west": 欧美电影
     "movie:jpkr": 日韩电影
-    "movie:hktw": 港台电影
     "movie:other": 其他电影
     "tv:cn": 国产剧
     "tv:west": 欧美剧
     "tv:jpkr": 日韩剧
-    "tv:hktw": 港台剧
     "tv:other": 其他剧集
     "anime:cn": 国产动漫
     "anime:jpkr": 日本动漫
