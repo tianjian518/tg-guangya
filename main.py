@@ -257,7 +257,7 @@ def start_discovery(cfg: AppConfig, config_path: str, scraper: WebScraper | None
     return disc
 
 
-def run_web(cfg: AppConfig, scraper: WebScraper, handler) -> None:
+def run_web(cfg: AppConfig, scraper: WebScraper, handler, on_prune=None) -> None:
     if cfg.scan_history:
         log.info("扫描历史消息（%d 页）...", cfg.history_pages)
         for ch in cfg.source.channels:
@@ -268,7 +268,7 @@ def run_web(cfg: AppConfig, scraper: WebScraper, handler) -> None:
             except Exception as exc:
                 log.warning("历史扫描 %s 出错: %s", ch, exc)
     log.info("开始轮询频道（间隔 %ds）...", cfg.source.poll_interval)
-    scraper.poll_forever(handler, max_consecutive_failures=3)
+    scraper.poll_forever(handler, max_consecutive_failures=3, on_prune=on_prune)
 
 
 def run_userbot(cfg: AppConfig, handler) -> None:
@@ -352,11 +352,23 @@ def main() -> None:
     log.info("配置加载完成 | 频道 %d 个 | 来源=%s | 自动发现=%s | 自动分类=%s",
              len(cfg.source.channels), cfg.source.type, "开" if disc else "关",
              "开" if resolver else "关")
+    # 零产出频道自动剔除：把被判定为"纯噪音"的频道从配置里移除（写回配置文件）
+    def _on_prune(ch: str) -> None:
+        try:
+            cfg.source.channels = [
+                c for c in cfg.source.channels
+                if str(c).strip().lower() != ch.lower()
+            ]
+            cfg.save(args.config)
+            log.info("自动剔除零产出频道: %s（已写回 %s）", ch, args.config)
+        except Exception as e:
+            log.warning("剔除频道写回配置失败 %s: %s", ch, e)
+
     try:
         if cfg.source.type == "userbot":
             run_userbot(cfg, handler)
         else:
-            run_web(cfg, source_obj, handler)
+            run_web(cfg, source_obj, handler, on_prune=_on_prune)
     except KeyboardInterrupt:
         log.info("收到中断信号")
     finally:

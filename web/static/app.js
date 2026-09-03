@@ -505,6 +505,11 @@ async function renderTab() {
       <label>历史扫描页数</label>
       <input type="number" id="rt-pages" min="1" value="${esc(S.history_pages)}" />
       <hr style="border:none;border-top:1px solid var(--bd);margin:14px 0" />
+      <label style="font-weight:600">自动发现频道</label>
+      <label><input type="checkbox" id="rt-disc" ${(S.discovery && S.discovery.enabled) ? "checked" : ""} style="width:auto"> 启用自动发现（从种子源自动扩充频道库）</label>
+      <p class="hint">⚠️ 自动发现会从聚合页里扒频道名自动加进配置。新手建议关闭；若开启，系统的「零产出自动剔除」会清掉长期不发链接的噪音频道，否则噪音越积越多、拖慢抓取还易触发限流。</p>
+      <button class="btn" id="rt-prune" style="margin-top:8px">🧹 清理无效频道（移除长期 0 链接的噪音频道）</button>
+      <div id="rt-prune-out" class="hint" style="margin-top:8px"></div>
       <label style="font-weight:600">转存去重</label>
       <label><input type="checkbox" id="dd-cloud" ${(S.dedup && S.dedup.cloud_check_new) ? "checked" : ""} style="width:auto"> 云端复查（强烈建议开启）</label>
       <p class="hint">开启后，新出现的链接也会去光鸭盘里按片名复查，防止「同一片子不同磁力」被重复转存七八上十次。关闭则只做本地磁力去重。</p>
@@ -520,12 +525,33 @@ async function renderTab() {
       S.max_retries = Math.max(1, Number($("#rt-retry").value) || 3);
       S.scan_history = $("#rt-hist").checked;
       S.history_pages = Math.max(1, Number($("#rt-pages").value) || 3);
+      S.discovery = S.discovery || {};
+      S.discovery.enabled = $("#rt-disc").checked;
       S.dedup = S.dedup || {};
       S.dedup.cloud_check_new = $("#dd-cloud").checked;
       S.dedup.upgrade = $("#dd-upg").checked;
       S.dedup.cache_ttl = Math.max(30, Number($("#dd-ttl").value) || 300);
       try { await api("PUT", "/settings", S); toast("已保存运行参数", "ok"); }
       catch (e) { errToast(e); }
+    });
+
+    $("#rt-prune")?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      $("#rt-prune-out").textContent = "清理中…（逐个频道检查链接，请稍候）";
+      try {
+        const r = await api("POST", "/channels/prune");
+        const n = (r.removed || []).length;
+        if (n === 0) {
+          $("#rt-prune-out").innerHTML = `✅ 无需清理：当前 ${r.total} 个频道都有链接产出。`;
+        } else {
+          $("#rt-prune-out").innerHTML =
+            `✅ 已移除 ${n} 个无效频道，剩余 ${r.kept} 个。<br>被移除：${esc((r.removed || []).join("、"))}<br><span class="muted">改完需「停止监听 → 启动监听」让新列表生效。</span>`;
+          // 同步前端状态，避免再次保存时把被删频道写回去
+          S.sources.channels = (S.sources.channels || []).filter((c) => !(r.removed || []).includes(c));
+        }
+      } catch (e) { $("#rt-prune-out").textContent = "清理失败：" + e.message; }
+      finally { btn.disabled = false; }
     });
   } else if (state.tab === "notify") {
     body.innerHTML = `

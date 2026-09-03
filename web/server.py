@@ -43,6 +43,7 @@ from core.guangya import GuangyaClient, GuangyaError  # noqa: E402
 from core.store import Store  # noqa: E402
 from core.data_dir import resolve_config_path, get_data_dir, resolve_rel  # noqa: E402
 from adapters.userbot import UserbotSource  # noqa: E402
+from adapters.web_scraper import WebScraper  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("web")
@@ -448,6 +449,36 @@ def put_settings(body: dict):
     cfg.apply_settings(body)
     cfg.save(str(CONFIG_PATH))
     return {"ok": True}
+
+
+@app.post("/api/channels/prune")
+def prune_channels():
+    """一键清理：移除「最近 N 页内从未出现过资源链接」的频道（纯噪音频道）。
+
+    这些频道大多是自动发现从聚合页扒出来的名字，跟影视资源无关。
+    会写回配置文件。抓取失败 / 抓取异常的频道一律不动，避免误删。
+    """
+    _sync_config_if_changed()
+    channels = list(cfg.source.channels)
+    if not channels:
+        return {"removed": [], "kept": 0, "total": 0}
+    pages = max(2, int(cfg.history_pages))
+    sc = WebScraper(channels, interval=cfg.source.poll_interval, proxy=cfg.source.proxy)
+    zero: list[str] = []
+    for ch in channels:
+        try:
+            msgs = list(sc.iter_history(ch, pages))
+            if not msgs:
+                continue  # 抓不到的不动
+            if sum(len(m.links) for m in msgs) == 0:
+                zero.append(ch)
+        except Exception:
+            continue  # 抓取异常的不动
+    if zero:
+        drop = {z.lower() for z in zero}
+        cfg.source.channels = [c for c in channels if str(c).strip().lower() not in drop]
+        cfg.save(str(CONFIG_PATH))
+    return {"removed": zero, "kept": len(cfg.source.channels), "total": len(channels)}
 
 
 # ---------- Telegram Userbot 登录（网页流程：手机 + 验证码）----------

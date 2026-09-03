@@ -160,14 +160,22 @@ class WebScraper:
         on_message: Callable[[ChannelMessage], None],
         stop_event=None,
         max_consecutive_failures: int = 5,
+        on_prune: Callable[[str], None] | None = None,
+        max_zero_yield_rounds: int = 30,
     ) -> None:
         """持续轮询所有频道，新消息交给 on_message 回调处理。
 
-        max_consecutive_failures：连续失败此次数后自动剔除该频道。
+        max_consecutive_failures：连续失败此次数后自动剔除该频道（连不上/被墙）。
+        on_prune：当某频道连续 max_zero_yield_rounds 轮“返回了消息但 0 链接产出”，
+                  且历史上从未产出过链接时回调——用于自动清理纯噪音频道
+                  （这类频道是从聚合页被自动发现扒出来的名字，跟资源无关）。
+                  注意：只要频道曾经产出过一次链接，就永久受保护，不会被误删。
         """
         log.info("网页抓取已启动，%d 个频道，间隔 %ds", len(self.channels), self.interval)
         seen: dict[str, set[str]] = {c: set() for c in self.channels}
         failures: dict[str, int] = {c: 0 for c in self.channels}  # 连续失败计数
+        no_link_rounds: dict[str, int] = {c: 0 for c in self.channels}  # 连续“有消息但0链接”轮数
+        ever_linked: set[str] = set()  # 曾经产出过链接的频道（永久保护）
         first_round = True
         round_num = 0
         while True:
@@ -175,7 +183,6 @@ class WebScraper:
                 break
             round_num += 1
             processed = 0
-            skipped_dead = 0
             active_channels = [c for c in self.channels if failures.get(c, 0) < max_consecutive_failures]
             if len(active_channels) != len(self.channels):
                 log.info(
@@ -186,6 +193,8 @@ class WebScraper:
                 self.channels = active_channels
                 failures = {c: failures[c] for c in active_channels}
                 seen = {c: seen[c] for c in active_channels}
+                no_link_rounds = {c: no_link_rounds.get(c, 0) for c in active_channels}
+            prune_candidates: set[str] = set()
             for channel in active_channels:
                 try:
                     msgs = self.fetch(channel)
@@ -195,6 +204,7 @@ class WebScraper:
                             log.warning("频道 %s 连续 %d 次无响应，已剔除", channel, max_consecutive_failures)
                         continue
                     failures[channel] = 0  # 成功重置计数
+                    linked_this_round = 0
                     for msg in msgs:
                         if first_round:
                             seen[channel].add(msg.message_id)
@@ -203,13 +213,35 @@ class WebScraper:
                         if msg.message_id in seen[channel]:
                             continue
                         seen[channel].add(msg.message_id)
+                        processed += 1
                         if msg.links:
                             on_message(msg)
-                            processed += 1
+                            linked_this_round += 1
+                    if not first_round:
+                        if linked_this_round > 0:
+                            ever_linked.add(channel)
+                            no_link_rounds[channel] = 0
+                        else:
+                            no_link_rounds[channel] = no_link_rounds.get(channel, 0) + 1
+                            if on_prune and channel not in ever_linked and no_link_rounds[channel] >= max_zero_yield_rounds:
+                                prune_candidates.add(channel)
                 except Exception as exc:
                     failures[channel] = failures.get(channel, 0) + 1
                     if failures[channel] <= 2 or failures[channel] % 10 == 0:
                         log.warning("轮询 %s 出错 (%d/%d): %s", channel, failures[channel], max_consecutive_failures, exc)
+            # 应用“零产出自动剔除”
+            if prune_candidates:
+                for ch in prune_candidates:
+                    log.info("频道 %s 连续 %d 轮有消息但 0 链接，自动剔除", ch, max_zero_yield_rounds)
+                    try:
+                        if on_prune:
+                            on_prune(ch)
+                    except Exception as e:
+                        log.warning("剔除回调失败 %s: %s", ch, e)
+                self.channels = [c for c in self.channels if c not in prune_candidates]
+                seen = {c: seen[c] for c in self.channels}
+                failures = {c: failures[c] for c in self.channels}
+                no_link_rounds = {c: no_link_rounds.get(c, 0) for c in self.channels}
             if first_round:
                 log.info("首轮扫描完成：%d 条消息登记", processed)
             else:
