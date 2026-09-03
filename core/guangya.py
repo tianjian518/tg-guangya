@@ -101,6 +101,11 @@ class GuangyaClient:
     def token(self) -> str:
         return self._access
 
+    @property
+    def refresh_value(self) -> str:
+        """当前生效的 refresh_token（刷新后可能被服务端轮换）。"""
+        return self._refresh
+
     def _persist(self) -> None:
         if self.on_token_change:
             try:
@@ -286,6 +291,31 @@ class GuangyaClient:
             raise GuangyaError(envelope.get("message") or f"光鸭错误 {envelope.get('code')}")
         return envelope.get("data")
 
+    def _get(self, base: str, path: str, headers: dict | None = None,
+             params: dict | None = None, raw: bool = False) -> Any:
+        """账户域的 GET 请求。
+
+        光鸭部分账户接口（如 /v1/user/me）只接受 GET：POST 会被网关在鉴权之前
+        直接返回 501 Method Not Allowed，表面看像「令牌错误」，实为方法错误。
+        """
+        url = base + path
+        req_headers = dict(headers) if headers is not None else self._api_headers(True)
+        resp = self._session.get(url, headers=req_headers, params=params, timeout=self.timeout)
+        if resp.status_code >= 400:
+            raise GuangyaError(f"光鸭 HTTP {resp.status_code}: {resp.text[:200]}")
+        try:
+            envelope = resp.json()
+        except ValueError as exc:
+            raise GuangyaError(f"光鸭返回非 JSON: {resp.text[:200]}") from exc
+        if raw:
+            return envelope
+        code = envelope.get("code")
+        if isinstance(code, int) and code != 0:
+            raise GuangyaError(envelope.get("msg") or envelope.get("message") or f"光鸭业务错误 {code}")
+        if envelope.get("success") is False:
+            raise GuangyaError(envelope.get("message") or f"光鸭错误 {envelope.get('code')}")
+        return envelope.get("data")
+
     def _account_post(self, path: str, body: dict, auth: bool = False) -> Any:
         # raw=True：账户接口返回顶层 JSON，不做 data 拆包
         return self._post(ACCOUNT_BASE, path, body, auth=False,
@@ -376,10 +406,13 @@ class GuangyaClient:
         接口来自 LitePan drivers/Guangya transport.go: pathFileList
           POST /userres/v1/file/get_file_list
         resType == 2 表示文件夹（见 models.go fileEntry.toFileItem）。
+
+        注意：光鸭的 page 从 **0** 开始计数（传 1 会越过首页，只返回 total 而没有
+        list，表现为「盘里空空如也」，进而导致去重失效、分类目录被重复创建）。
         """
         body = {
             "parentId": parent_id or "",
-            "page": 1,
+            "page": 0,
             "pageSize": page_size,
             "orderBy": 1,
             "sortType": 0,
@@ -416,11 +449,16 @@ class GuangyaClient:
         return file_id
 
     def me(self) -> dict:
-        """获取当前登录的账号信息（昵称、空间等）。"""
+        """获取当前登录的账号信息（昵称、手机号等）。
+
+        注意：该端点只接受 **GET**。此前用 POST 会被网关在鉴权之前直接拒绝，
+        返回 501 `{"error":"unimplemented","error_code":12,"Method Not Allowed"}`，
+        表现为「令牌校验失败」，实际与令牌无关。
+        """
         h = self.build_account_headers()
         if self._access:
             h["Authorization"] = "Bearer " + self._access
-        return self._post(ACCOUNT_BASE, "/v1/user/me", {}, auth=False, headers=h, raw=True) or {}
+        return self._get(ACCOUNT_BASE, "/v1/user/me", headers=h, raw=True) or {}
 
     def delete_file(self, parent_id: str, file_id: str) -> None:
         """删除网盘里的文件/目录（用于洗版时替换旧版本）。
@@ -444,9 +482,11 @@ class GuangyaClient:
         时按文件名匹配使用。接口同 LitePan transport.go: pathFileList
           POST /userres/v1/file/get_file_list
         返回字段见 models.go fileEntry（fileName / fileSize / resType==2 为文件夹 / md5）。
+
+        page 从 0 开始，逐页 +1（见 list_folders 的说明）。
         """
         out: list[dict] = []
-        page = 1
+        page = 0
         while True:
             body = {
                 "parentId": parent_id or "",
