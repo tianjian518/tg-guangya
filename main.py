@@ -25,6 +25,7 @@ from adapters.userbot import UserbotSource
 from core.guangya import GuangyaClient, GuangyaError
 from core.store import Store, MagnetRecord
 from core.matcher import KeywordFilter, parse_title
+from core.naming import build_cn_filename
 from core.notifier import Notifier
 from core.config import AppConfig
 from core.discovery import ChannelDiscovery
@@ -64,17 +65,36 @@ _OFFLINE_POLL_INTERVAL = 15   # 轮询间隔秒数
 _TASK_MONITOR_INTERVAL = 60   # 后台监控线程检查间隔
 
 
-def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int) -> tuple[bool, str, str, str]:
+def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int,
+               cn_title: str = "") -> tuple[bool, str, str, str]:
     """提交单个链接到光鸭离线下载。
 
     返回 (ok, task_id, name, final_status_text)。
     提交后会等待离线任务完成（最多 _OFFLINE_WAIT_TIMEOUT 秒），
     超时或失败时仍返回 ok=True（因为任务已创建，只是未完成）。
+
+    cn_title 为 Telegram 中文标题；若提供，会尝试把云盘文件名改成中文
+    （创建时指定 + 完成后 rename 双保险，任一生效即可）。
     """
     last_err = ""
     for attempt in range(1, max_retries + 1):
         try:
-            task_id, name = client.create_offline_task(url, parent_id)
+            # 拿到原种子文件名以提取后缀，构造中文名
+            resolved = None
+            cn_name = ""
+            if cn_title:
+                try:
+                    resolved = client.resolve(url)
+                    orig = (resolved or {}).get("name", "")
+                    ext = orig.rsplit(".", 1)[-1].lower() if "." in orig else ""
+                    if not (ext and len(ext) <= 5):
+                        ext = ""
+                    cn_name = build_cn_filename(cn_title, ext)
+                except Exception:
+                    resolved = None
+                    cn_name = build_cn_filename(cn_title)
+            task_id, name = client.create_offline_task(
+                url, parent_id, cn_name=cn_name, resolved=resolved)
             # 等待任务完成：解析资源通常很快，超过 3 分钟说明已经卡住
             log.info("提交离线任务 %s，等待完成（最多 %ds）...", task_id, _OFFLINE_WAIT_TIMEOUT)
             status_code, msg = client.wait_offline_task(
@@ -82,6 +102,18 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
             )
             if status_code == GuangyaClient.STATUS_SUCCESS:
                 log.info("任务 %s 完成: %s", task_id, msg)
+                # 双保险：若创建时未用中文名（光鸭忽略 fileName），任务完成后补 rename
+                if cn_name:
+                    try:
+                        hit = next((t for t in client.list_tasks()
+                                    if t.task_id == task_id and t.file_id), None)
+                        if hit and hit.name != cn_name:
+                            client.rename_file(hit.file_id, cn_name)
+                            log.info("已重命名为中文: %s", cn_name)
+                        elif hit and hit.name == cn_name:
+                            log.info("创建时即已用中文名: %s", cn_name)
+                    except GuangyaError as exc:
+                        log.warning("中文重命名失败（保留原名 %s）: %s", name, exc)
                 return True, task_id, name, "done"
             if status_code in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
                 log.warning("任务 %s 失败: %s", task_id, msg)
@@ -159,7 +191,8 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
             target, category = pick_target(msg.text)
-            ok2, task_id, name, final_status = submit_one(client, url, target, max_retries)
+            ok2, task_id, name, final_status = submit_one(
+                client, url, target, max_retries, cn_title=msg.text)
             if ok2:
                 db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
                 store.update(h, status=db_status,

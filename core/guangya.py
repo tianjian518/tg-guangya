@@ -376,19 +376,39 @@ class GuangyaClient:
         info["res_type"] = data.get("resType", 0)
         return info
 
-    def create_offline_task(self, url: str, parent_id: str = "") -> tuple[str, str]:
-        """提交离线下载，返回 (task_id, 解析出的名称)。"""
-        resolved = self.resolve(url)
+    def create_offline_task(self, url: str, parent_id: str = "",
+                            cn_name: str = "", resolved: dict | None = None) -> tuple[str, str]:
+        """提交离线下载，返回 (task_id, 解析出的英文原名)。
+
+        cn_name 为可选的中文文件名——若光鸭支持在创建时指定，文件直接以中文名落地；
+        若不支持则忽略，调用方可在任务完成后用 rename_file 补救。
+        resolved 可传入已解析结果以复用，避免重复调用 resolve 接口。
+        """
+        if resolved is None:
+            resolved = self.resolve(url)
         body = {
             "url": url,
             "parentId": parent_id or "",
             "resType": resolved.get("res_type", 0),
         }
+        if cn_name:
+            body["fileName"] = cn_name
         data = self._api_post("/cloudcollection/v1/create_task", body) or {}
         task_id = (data.get("taskId") or "").strip()
         if not task_id:
             raise GuangyaError("光鸭未返回 taskId")
         return task_id, resolved.get("name", "")
+
+    def rename_file(self, file_id: str, new_name: str) -> None:
+        """尝试重命名网盘文件（失败安全由调用方保证）。
+
+        接口对齐 LitePan transport.go 的 pathRenameFile：
+          POST /userres/v1/file/rename   body {"fileId": ..., "fileName": ...}
+        若光鸭无此接口会抛 GuangyaError，调用方捕获后保留原名即可，不影响转存。
+        """
+        if not file_id or not new_name:
+            return
+        self._api_post("/userres/v1/file/rename", {"fileId": file_id, "fileName": new_name})
 
     def list_tasks(self, statuses: Iterable[int] | None = None, page_size: int = 50) -> list[OfflineTask]:
         """拉取离线任务列表（自动翻页）。"""
