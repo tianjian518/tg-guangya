@@ -608,55 +608,75 @@ async function renderDirList() {
   } catch (e) { el.innerHTML = `<div class="empty">读取目录失败：${esc(e.message)}</div>`; }
 }
 
-/* ============ 扫码登录弹窗 ============ */
+/* ============ 登录弹窗（按 LitePan：默认填入 Token，扫码折叠） ============ */
 function openLoginModal() {
   const root = $("#modal-root");
   root.innerHTML = `
     <div class="modal-mask">
       <div class="modal">
-        <h3>光鸭扫码登录</h3>
-        <div class="qr-box"><img id="qr-img" alt="二维码" /></div>
-        <p id="qr-err" class="err-line"></p>
-        <p class="hint">用「光鸭云盘」App 扫码并确认授权。二维码 2 分钟内有效。</p>
-        <p class="row"><a id="qr-link" class="pill" target="_blank" rel="noopener">🔗 打不开二维码？点此打开链接</a></p>
-        <div class="row" style="justify-content:space-between;margin-top:8px">
-          <span id="qr-status" class="badge dim"><span class="dot"></span> 等待扫码…</span>
-          <button class="btn ghost" id="qr-close">关闭</button>
+        <h3>光鸭登录</h3>
+        <p class="hint">推荐：把 LitePan（或光鸭 App）拿到的 <b>访问令牌</b>与<b>刷新令牌</b>粘到下面，点保存即可登录。令牌会自动续期，过期前无需重新填。</p>
+        <div class="form-row">
+          <label>访问令牌 *</label>
+          <textarea id="tk-access" placeholder="access_token" rows="3"></textarea>
         </div>
+        <div class="form-row">
+          <label>刷新令牌 *</label>
+          <textarea id="tk-refresh" placeholder="refresh_token" rows="3"></textarea>
+        </div>
+        <div class="row" style="justify-content:flex-end;margin-top:8px">
+          <button class="btn ghost" id="qr-close">关闭</button>
+          <button class="btn primary" id="tk-save">保存并登录</button>
+        </div>
+        <p id="tk-msg" class="err-line"></p>
+
+        <details class="manual-login">
+          <summary>用二维码扫码登录（备用）</summary>
+          <div class="qr-box"><img id="qr-img" alt="二维码" /></div>
+          <p id="qr-err" class="err-line"></p>
+          <p class="hint">用「光鸭云盘」App 扫码并确认授权。二维码 2 分钟内有效。</p>
+          <p class="row"><a id="qr-link" class="pill" target="_blank" rel="noopener">🔗 打不开二维码？点此打开链接</a></p>
+          <span id="qr-status" class="badge dim"><span class="dot"></span> 等待扫码…</span>
+        </details>
       </div>
     </div>`;
-  api("POST", "/guangya/login/start").then((info) => {
-    $("#qr-img").src = info.qr_data_url;
-    $("#qr-link").href = info.qr_url;
-    let live = true;
-    const iv = setInterval(async () => {
-      if (!live) return;
-      try {
-        const r = await api("GET", "/guangya/login/poll?device_code=" + encodeURIComponent(info.device_code));
-        const st = $("#qr-status");
-        if (r.status === "success") {
-          st.className = "badge ok"; st.innerHTML = `<span class="dot"></span> 登录成功`;
-          clearInterval(iv); live = false;
-          toast("光鸭登录成功", "ok");
-          await refreshStatus();
-          setTimeout(() => closeModal(root), 800);
-          return;
-        }
-        if (r.status === "denied") { st.className = "badge err"; st.innerHTML = `<span class="dot"></span> 已取消`; clearInterval(iv); }
-        else if (r.status === "expired") { st.className = "badge err"; st.innerHTML = `<span class="dot"></span> 二维码过期`; clearInterval(iv); }
-      } catch (e) { /* 忽略轮询抖动 */ }
-    }, Math.max(2000, info.interval * 1000));
-  }).catch((e) => {
-    const msg = e.message || String(e);
-    const errEl = $("#qr-err");
-    if (errEl) { errEl.textContent = "⚠️ 登录失败：" + msg; }
-    const st = $("#qr-status");
-    if (st) { st.className = "badge err"; st.innerHTML = `<span class="dot"></span> 登录失败`; }
-    const box = $("#qr-img");
-    if (box) { box.alt = "生成二维码失败：" + msg; box.removeAttribute("src"); }
-    errToast(e);
-  });
   $("#qr-close").addEventListener("click", () => closeModal(root));
+  const tkMsg = $("#tk-msg");
+  $("#tk-save").addEventListener("click", async () => {
+    const access = $("#tk-access").value.trim();
+    const refresh = $("#tk-refresh").value.trim();
+    if (!access) { tkMsg.textContent = "⚠️ 请填写访问令牌"; return; }
+    if (!refresh) { tkMsg.textContent = "⚠️ 请填写刷新令牌（用于自动续期，访问令牌 2 小时就过期）"; return; }
+    tkMsg.textContent = "校验中…";
+    try {
+      const r = await api("POST", "/guangya/login/manual", { access_token: access, refresh_token: refresh });
+      tkMsg.textContent = "✅ 登录成功";
+      toast("光鸭登录成功", "ok");
+      await refreshStatus();
+      setTimeout(() => closeModal(root), 600);
+    } catch (e) { tkMsg.textContent = "⚠️ " + (e.message || e); }
+  });
+  // 二维码折叠里默认不主动发起，留给需要的人点开
+  const details = root.querySelector("details.manual-login");
+  if (details) details.addEventListener("toggle", () => {
+    if (details.open && !$("#qr-img").src) {
+      api("POST", "/guangya/login/start").then((info) => {
+        $("#qr-img").src = info.qr_data_url;
+        $("#qr-link").href = info.qr_url;
+        let live = true;
+        const iv = setInterval(async () => {
+          if (!live) return;
+          try {
+            const r = await api("GET", "/guangya/login/poll?device_code=" + encodeURIComponent(info.device_code));
+            const st = $("#qr-status");
+            if (r.status === "success") { st.className="badge ok"; st.innerHTML=`<span class="dot"></span> 登录成功`; clearInterval(iv); live=false; toast("光鸭登录成功","ok"); await refreshStatus(); setTimeout(()=>closeModal(root),800); }
+            else if (r.status === "denied") { st.className="badge err"; st.innerHTML=`<span class="dot"></span> 已取消`; clearInterval(iv); }
+            else if (r.status === "expired") { st.className="badge err"; st.innerHTML=`<span class="dot"></span> 二维码过期`; clearInterval(iv); }
+          } catch(e){}
+        }, Math.max(2000, info.interval * 1000));
+      }).catch((e) => { const el=$("#qr-err"); if(el) el.textContent = "⚠️ 登录失败：" + (e.message||e); });
+    }
+  });
 }
 function closeModal(root) { root.innerHTML = ""; }
 
