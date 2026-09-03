@@ -258,7 +258,8 @@ class GuangyaClient:
             "X-Device-Id": self.device_id,
         }
 
-    def _post(self, base: str, path: str, body: dict, auth: bool = True, retry: bool = True, headers: dict | None = None) -> Any:
+    def _post(self, base: str, path: str, body: dict, auth: bool = True,
+              retry: bool = True, headers: dict | None = None, raw: bool = False) -> Any:
         url = base + path
         req_headers = dict(headers) if headers is not None else self._api_headers(auth)
         resp = self._session.post(
@@ -273,17 +274,26 @@ class GuangyaClient:
             envelope = resp.json()
         except ValueError as exc:
             raise GuangyaError(f"光鸭返回非 JSON: {resp.text[:200]}") from exc
-        # LitePan 的 accountErrorMessage / apiRequest 都按 success + code 判断
+        if raw:
+            # 账户接口（设备码 / 登录 / 刷新令牌 / me）直接返回内容，没有 success/data 信封；
+            # 之前错误地拆了 data 层导致 device_code 拿不到、报「返回不完整」。
+            return envelope
+        # 业务接口信封：{code, msg, data:{...}}（部分接口也带 success 字段）
+        code = envelope.get("code")
+        if isinstance(code, int) and code != 0:
+            raise GuangyaError(envelope.get("msg") or envelope.get("message") or f"光鸭业务错误 {code}")
         if envelope.get("success") is False:
             raise GuangyaError(envelope.get("message") or f"光鸭错误 {envelope.get('code')}")
         return envelope.get("data")
 
     def _account_post(self, path: str, body: dict, auth: bool = False) -> Any:
-        return self._post(ACCOUNT_BASE, path, body, auth=False, headers=self.build_account_headers())
+        # raw=True：账户接口返回顶层 JSON，不做 data 拆包
+        return self._post(ACCOUNT_BASE, path, body, auth=False,
+                          headers=self.build_account_headers(), raw=True)
 
     def _api_post(self, path: str, body: dict) -> Any:
         self.ensure_token()
-        return self._post(API_BASE, path, body, auth=True)
+        return self._post(API_BASE, path, body, auth=True, raw=False)
 
     # ---------- 业务接口 ----------
 
@@ -410,7 +420,7 @@ class GuangyaClient:
         h = self.build_account_headers()
         if self._access:
             h["Authorization"] = "Bearer " + self._access
-        return self._post(ACCOUNT_BASE, "/v1/user/me", {}, auth=False, headers=h) or {}
+        return self._post(ACCOUNT_BASE, "/v1/user/me", {}, auth=False, headers=h, raw=True) or {}
 
     def delete_file(self, parent_id: str, file_id: str) -> None:
         """删除网盘里的文件/目录（用于洗版时替换旧版本）。

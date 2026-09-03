@@ -33,7 +33,7 @@ def test_account_post_uses_account_headers():
     """账户请求必须带上设备指纹头，否则光鸭返回空 data。"""
     captured = {}
 
-    def fake_post(self, base, path, body, auth=True, retry=True, headers=None):
+    def fake_post(self, base, path, body, auth=True, retry=True, headers=None, raw=False):
         captured["headers"] = headers
         return {"device_code": "DC", "verification_uri_complete": "https://x",
                 "interval": 5, "expires_in": 120}

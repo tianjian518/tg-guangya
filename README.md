@@ -1,6 +1,6 @@
 # TG 频道磁力 → 光鸭云盘 自动转存
 
-> 当前版本：**v1.0.2** ｜ 开源协议：MIT ｜ Docker 镜像：`tianjian518/tg-guangya`
+> 当前版本：**v1.0.3** ｜ 开源协议：MIT ｜ Docker 镜像：`tianjian518/tg-guangya`
 
 把 Telegram 公开频道里发的磁力链接，自动丢给光鸭云盘**离线下载**（光鸭服务器自己跑 BT，不占你带宽）。
 
