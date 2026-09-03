@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import threading
 import time
 
@@ -65,6 +66,80 @@ _OFFLINE_POLL_INTERVAL = 15   # 轮询间隔秒数
 _TASK_MONITOR_INTERVAL = 60   # 后台监控线程检查间隔
 
 
+def _norm(s: str) -> str:
+    """文件夹名归一化：去扩展名、去掉非中英文数字的字符、转小写。
+
+    用于把「种子英文原名」和「云端实际文件夹名」拉到同一标准比对——
+    两者常只差 .torrent / .mp4 后缀、或 WEB-DL 之类的额外尾巴。
+    """
+    s = (s or "").strip().lower()
+    base = s.rsplit(".", 1)[0] if "." in s else s
+    return re.sub(r"[^0-9a-z一-鿿]", "", base)
+
+
+def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
+                         parent_id: str, cn_folder: str) -> bool:
+    """把离线下载生成的【外层文件夹】重命名为中文名。返回 True 表示已处理。
+
+    定位文件夹有两条路（关键是第 ② 条兜底）：
+      ① 用离线任务返回的 fileId（并校验它确实是目标目录下的文件夹）
+      ② 拿不到 fileId 时，按英文种子原名在目录下匹配文件夹
+
+    之前只走 ①，一旦光鸭 list_task 不返回 fileId 就【静默跳过、一条日志都没有】，
+    表现为「升级了却仍是英文名」。现在两条路都走，并且每步打日志便于排查。
+    """
+    try:
+        entries = client.list_dir(parent_id)
+    except GuangyaError as exc:
+        log.warning("改名失败：无法列举目标目录 %s（保持英文原名 %s）: %s",
+                    parent_id, orig_name, exc)
+        return False
+    folders = [e for e in entries if e.get("res_type") == 2]
+
+    # 已经是中文名（创建时即生效）→ 无需再动
+    if any(_norm(e.get("name")) == _norm(cn_folder) for e in folders):
+        log.info("外层文件夹已是中文名（创建时即生效）: %s", cn_folder)
+        return True
+
+    fid = ""
+    # ① 优先用离线任务返回的 fileId
+    try:
+        hit = next((t for t in client.list_tasks() if t.task_id == task_id and t.file_id), None)
+    except GuangyaError:
+        hit = None
+    if hit:
+        if any(e.get("file_id") == hit.file_id for e in folders):
+            fid = hit.file_id
+        else:
+            log.info("改名诊断：离线任务 fileId=%s 不在目标目录内，改按英文原名匹配", hit.file_id)
+    else:
+        log.info("改名诊断：离线任务未返回 fileId，改按英文原名匹配")
+
+    # ② 按英文原名在目标目录内匹配文件夹（兜底，不依赖 fileId）
+    if not fid:
+        want = _norm(orig_name)
+        for e in folders:
+            if _norm(e.get("name")) == want:
+                fid = e.get("file_id")
+                break
+        if not fid:  # 子串兜底（云端名可能比种子名多 WEB-DL 之类尾巴）
+            for e in folders:
+                n = _norm(e.get("name"))
+                if want and n and (want in n or n in want):
+                    fid = e.get("file_id")
+                    break
+        log.info("改名诊断：目标目录内共 %d 个文件夹，英文原名 %r → 匹配结果 %s",
+                 len(folders), orig_name, fid or "未匹配到")
+
+    if not fid:
+        log.warning("改名失败：未能定位外层文件夹（英文原名 %s），保持英文", orig_name)
+        return False
+
+    client.rename_file(fid, cn_folder)
+    log.info("外层文件夹已重命名为中文: %s", cn_folder)
+    return True
+
+
 def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int,
                cn_title: str = "") -> tuple[bool, str, str, str]:
     """提交单个链接到光鸭离线下载。
@@ -77,9 +152,11 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     （电影/剧集所在的目录）重命名为中文标题，里面的文件保持原名不动。
     """
     last_err = ""
+    # 中文文件夹名（不带文件后缀）：创建时先尝试指定，完成后再校验 + rename 兜底
+    cn_folder = build_cn_filename(cn_title) if cn_title else ""
     for attempt in range(1, max_retries + 1):
         try:
-            task_id, name = client.create_offline_task(url, parent_id)
+            task_id, name = client.create_offline_task(url, parent_id, cn_name=cn_folder)
             # 等待任务完成：解析资源通常很快，超过 3 分钟说明已经卡住
             log.info("提交离线任务 %s，等待完成（最多 %ds）...", task_id, _OFFLINE_WAIT_TIMEOUT)
             status_code, msg = client.wait_offline_task(
@@ -87,25 +164,10 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
             )
             if status_code == GuangyaClient.STATUS_SUCCESS:
                 log.info("任务 %s 完成: %s", task_id, msg)
-                # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面文件）
-                if cn_title:
+                # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面的文件）
+                if cn_folder:
                     try:
-                        cn_folder = build_cn_filename(cn_title)  # 无后缀，给文件夹用
-                        if cn_folder:
-                            hit = next((t for t in client.list_tasks()
-                                        if t.task_id == task_id and t.file_id), None)
-                            if hit:
-                                fid = hit.file_id
-                                # 校验 fid 指向的是文件夹（resType==2），避免误改里面的文件
-                                is_folder = any(
-                                    e["file_id"] == fid and e["res_type"] == 2
-                                    for e in client.list_dir(parent_id)
-                                )
-                                if is_folder:
-                                    client.rename_file(fid, cn_folder)
-                                    log.info("外层文件夹已重命名为中文: %s", cn_folder)
-                                else:
-                                    log.info("离线任务 fileId 非文件夹，跳过改名（保持文件原名）")
+                        _rename_folder_to_cn(client, task_id, name, parent_id, cn_folder)
                     except GuangyaError as exc:
                         log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
                 return True, task_id, name, "done"
