@@ -257,7 +257,8 @@ class AppConfig:
     def save(self, path: str) -> None:
         """把整个配置写回 YAML（排序保持定义顺序）。"""
         with open(path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(self.to_dict(), f, allow_unicode=True, sort_keys=False)
+            # Python 3.7 的 PyYAML 3.13 不支持 sort_keys 参数
+            yaml.safe_dump(self.to_dict(), f, allow_unicode=True)
 
     def apply_settings(self, s: dict) -> None:
         """合并前端提交的设置（不涉及令牌）。键缺失则保持不变。"""
