@@ -170,45 +170,136 @@ tr:hover td { background: rgba(255, 255, 255, .02); }
 .muted { color: var(--text-dim); }
 .right-action { float: right; }
 
-/* ---------- 手机自适应（窄屏：侧边栏转底部导航，内容满宽） ---------- */
+/* ---------- 手机适配：竖排布局 + 顶部条 + 底部固定导航 ---------- */
 @media (max-width: 768px) {
-  .layout { flex-direction: column; }
+  html, body { height: 100%; overscroll-behavior-y: none; }
+
+  /* 整体改成竖排：顶部条 + 内容区 + 底部固定导航 */
+  .layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh; /* iOS 动态视口，避免 100vh 算到地址栏后面的老 bug */
+  }
+
+  /* 顶部条：粘顶可见，显示当前页标题 + 状态徽标 */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    height: 48px;
+    padding: 0 12px;
+    background: var(--bg-soft);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+  .topbar h1 { font-size: 16px; font-weight: 600; margin: 0; }
+  .topbar .right { display: flex; align-items: center; gap: 6px; }
+  .topbar .badge { font-size: 11px; padding: 2px 8px; }
+
+  /* 内容区：可独立滚动，给底部导航 + iOS 安全区留位 */
+  .main {
+    flex: 1;
+    min-height: 0; /* 关键：让 flex 子项能收缩，内容才会在内部滚动 */
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+  }
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 12px;
+    padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  }
+
+  /* 侧边栏变身底部导航：真·fixed 钉底 */
   .sidebar {
-    width: 100%; height: auto;
-    position: fixed; left: 0; right: 0; bottom: 0;
-    flex-direction: row; align-items: center;
-    padding: 6px 4px; gap: 2px;
-    border-right: none; border-top: 1px solid var(--border);
-    background: var(--bg-soft); z-index: 15;
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: auto;
+    min-height: 56px;
+    z-index: 100;
+    background: var(--bg-soft);
+    border-top: 1px solid var(--border);
+    border-right: none;
+    box-shadow: 0 -6px 20px rgba(0, 0, 0, .45);
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    justify-content: space-around;
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    gap: 0;
   }
   .brand { display: none; }
-  .nav { flex-direction: row; align-items: center; gap: 2px; flex: 1; overflow-x: auto; }
-  .nav a {
-    flex-direction: column; gap: 2px;
-    padding: 6px 9px; font-size: 11px; white-space: nowrap;
-    border-radius: 9px;
+
+  /* 5 个导航项均分；`.bottom` 用 display:contents 让设置项平级参与排布 */
+  .nav {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-around;
+    gap: 0;
+    flex: 1;
+    width: 100%;
   }
-  .nav a .ico { width: auto; font-size: 17px; }
-  .nav a.active { box-shadow: none; background: var(--panel-2); }
   .nav .spacer { display: none; }
-  .nav .bottom { border-top: none; padding-top: 0; margin-top: 0; }
-  .main { min-width: 0; }
-  .topbar { padding: 0 14px; height: 50px; }
-  .topbar h1 { font-size: 15px; }
-  .content { padding: 14px 12px 84px; }   /* 底部留白给固定导航 */
+  .nav .bottom {
+    display: contents; /* 让里面的 <a> 直接成为 .nav 的 flex 子项，5 个等宽 */
+    border: none; padding: 0; margin: 0;
+  }
+  .nav a {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 2px;
+    min-height: 48px; /* iOS 推荐最小点击区 */
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--text-dim);
+    text-decoration: none;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  .nav a .ico { width: auto; font-size: 20px; line-height: 1; }
+  .nav a.active {
+    background: var(--panel-2);
+    color: var(--text);
+    box-shadow: none;
+  }
+
+  /* 通用组件微调 */
   .card { padding: 14px; }
+  .card h3 { font-size: 14px; }
   .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid { gap: 12px; }
   .stat .num { font-size: 22px; }
   .stat { padding: 14px; }
-  .tabs { flex-wrap: nowrap; overflow-x: auto; }
-  .tabs button { padding: 9px 11px; white-space: nowrap; }
-  .modal { width: calc(100vw - 28px); max-height: 88vh; overflow: auto; padding: 18px; }
+  .stat .label { font-size: 12px; }
+  .tabs { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tabs button { padding: 9px 12px; white-space: nowrap; }
+  .modal { width: calc(100vw - 24px); max-height: 85vh; overflow: auto; padding: 16px; }
   .row { gap: 8px; }
-  input[type=text], input[type=number], select, textarea { font-size: 16px; }  /* 防 iOS 聚焦缩放 */
+  /* iOS 聚焦防缩放：输入框 ≥16px */
+  input[type=text], input[type=number], input[type=password], select, textarea { font-size: 16px; }
+  /* 表格横向滚动，避免挤压变形 */
+  table { font-size: 12px; }
+  th, td { padding: 8px 10px; }
+  .logs { height: 240px; font-size: 11px; }
 }
 
 @media (max-width: 420px) {
-  .nav a { padding: 6px 7px; font-size: 10px; }
-  .topbar h1 { font-size: 14px; }
-  .content { padding: 12px 10px 82px; }
+  .topbar h1 { font-size: 15px; }
+  .topbar .right .badge { font-size: 10px; padding: 2px 6px; }
+  .nav a { font-size: 10px; min-height: 46px; }
+  .nav a .ico { font-size: 18px; }
+  .content { padding: 10px; }
+  .modal { width: calc(100vw - 16px); padding: 14px; }
 }
