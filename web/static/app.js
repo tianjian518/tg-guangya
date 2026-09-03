@@ -259,6 +259,7 @@ views.settings = async function () {
     <div class="card">
       <div class="tabs" id="tabs">
         <button data-t="account">光鸭账号</button>
+        <button data-t="telegram">Telegram 账号</button>
         <button data-t="dir">转存目录</button>
         <button data-t="channels">频道配置</button>
         <button data-t="filter">过滤规则</button>
@@ -294,6 +295,35 @@ async function renderTab() {
     $("#login-btn")?.addEventListener("click", openLoginModal);
     $("#logout-btn")?.addEventListener("click", async () => {
       try { await api("POST", "/guangya/logout"); toast("已退出登录", "ok"); await refreshStatus(); views.settings(); }
+      catch (e) { errToast(e); }
+    });
+  } else if (state.tab === "telegram") {
+    let ok = false;
+    try { const r = await api("GET", "/userbot/status"); ok = !!r.logged_in; } catch (e) {}
+    state.userbot_logged_in = ok;
+    const tg = (S.telegram || {});
+    body.innerHTML = `
+      <div class="kv"><span>登录状态</span><span class="badge ${ok ? "ok" : "err"}"><span class="dot"></span> ${ok ? "已登录" : "未登录"}</span></div>
+      <p class="hint">用你自己的 TG 账号实时收消息（官方接口，不限流、能收私有频道、秒级到）。建议用<b>小号</b>。需先在 <a href="https://my.telegram.org" target="_blank" rel="noopener">my.telegram.org</a> 申请 api_id / api_hash（免费，2 分钟）。</p>
+      <label>api_id</label>
+      <input type="text" id="tg-apiid" value="${esc(tg.api_id || "")}" placeholder="如 1234567" />
+      <label>api_hash</label>
+      <input type="text" id="tg-apihash" value="${esc(tg.api_hash || "")}" placeholder="如 a1b2c3d4e5f6..." />
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" id="tg-save">保存凭据</button>
+        ${ok ? `<button class="btn danger" id="tg-logout">退出登录</button>` : `<button class="btn" id="tg-login">📱 登录账号</button>`}
+      </div>
+      <p class="hint">保存后点「登录账号」，按提示填手机号 → 收验证码 → 填入即可。代理已在「运行参数」里配置，会自动走，无需在此填。</p>`;
+    $("#tg-save").addEventListener("click", async () => {
+      S.telegram = S.telegram || {};
+      S.telegram.api_id = $("#tg-apiid").value.trim();
+      S.telegram.api_hash = $("#tg-apihash").value.trim();
+      try { await api("PUT", "/settings", S); toast("已保存 Telegram 凭据", "ok"); }
+      catch (e) { errToast(e); }
+    });
+    $("#tg-login")?.addEventListener("click", openUserbotLoginModal);
+    $("#tg-logout")?.addEventListener("click", async () => {
+      try { await api("POST", "/userbot/logout"); state.userbot_logged_in = false; toast("已退出登录", "ok"); renderTab(); }
       catch (e) { errToast(e); }
     });
   } else if (state.tab === "dir") {
@@ -683,6 +713,86 @@ function openLoginModal() {
   });
 }
 function closeModal(root) { root.innerHTML = ""; }
+
+/* ============ Telegram Userbot 登录弹窗（手机 + 验证码，可选 2FA） ============ */
+function openUserbotLoginModal() {
+  const root = $("#modal-root");
+  root.innerHTML = `
+    <div class="modal-mask">
+      <div class="modal">
+        <h3>Telegram 账号登录</h3>
+        <div id="ub-step-phone">
+          <p class="hint">输入你的手机号（含国家区号，如 +8613800138000），Telegram 会发验证码。</p>
+          <div class="form-row"><label>手机号</label><input type="text" id="ub-phone" placeholder="+86..." /></div>
+          <div class="row" style="justify-content:flex-end;margin-top:8px">
+            <button class="btn ghost" id="ub-close">关闭</button>
+            <button class="btn primary" id="ub-send">发送验证码</button>
+          </div>
+          <p id="ub-msg" class="err-line"></p>
+        </div>
+        <div id="ub-step-code" style="display:none">
+          <p class="hint">已向 <b id="ub-phone-show"></b> 发送验证码，请查收 TG 短信 / 其他客户端，填入下方。</p>
+          <div class="form-row"><label>验证码</label><input type="text" id="ub-code" placeholder="12345" /></div>
+          <div class="row" style="justify-content:flex-end;margin-top:8px">
+            <button class="btn primary" id="ub-submit-code">登录</button>
+          </div>
+          <p id="ub-code-msg" class="err-line"></p>
+        </div>
+        <div id="ub-step-pwd" style="display:none">
+          <p class="hint">该账号开启了两步验证，请输入登录密码。</p>
+          <div class="form-row"><label>登录密码</label><input type="password" id="ub-pwd" /></div>
+          <div class="row" style="justify-content:flex-end;margin-top:8px">
+            <button class="btn primary" id="ub-submit-pwd">确认</button>
+          </div>
+          <p id="ub-pwd-msg" class="err-line"></p>
+        </div>
+      </div>
+    </div>`;
+  $("#ub-close").addEventListener("click", () => closeModal(root));
+  const msg = $("#ub-msg");
+  $("#ub-send").addEventListener("click", async () => {
+    const phone = $("#ub-phone").value.trim();
+    if (!phone) { msg.textContent = "⚠️ 请填写手机号"; return; }
+    msg.textContent = "发送中…";
+    try {
+      await api("POST", "/userbot/login/start", { phone });
+      $("#ub-step-phone").style.display = "none";
+      $("#ub-step-code").style.display = "block";
+      $("#ub-phone-show").textContent = phone;
+      msg.textContent = "";
+    } catch (e) { msg.textContent = "⚠️ " + (e.message || e); }
+  });
+  $("#ub-submit-code").addEventListener("click", async () => {
+    const code = $("#ub-code").value.trim();
+    const cm = $("#ub-code-msg");
+    if (!code) { cm.textContent = "⚠️ 请填写验证码"; return; }
+    cm.textContent = "登录中…";
+    try {
+      const r = await api("POST", "/userbot/login/code", { code });
+      if (r.status === "password_needed") {
+        $("#ub-step-code").style.display = "none";
+        $("#ub-step-pwd").style.display = "block";
+        return;
+      }
+      toast("Telegram 登录成功", "ok");
+      state.userbot_logged_in = true;
+      setTimeout(() => closeModal(root), 500);
+      views.settings();
+    } catch (e) { cm.textContent = "⚠️ " + (e.message || e); }
+  });
+  $("#ub-submit-pwd").addEventListener("click", async () => {
+    const pwd = $("#ub-pwd").value;
+    const pm = $("#ub-pwd-msg");
+    pm.textContent = "验证中…";
+    try {
+      await api("POST", "/userbot/login/password", { password: pwd });
+      toast("Telegram 登录成功", "ok");
+      state.userbot_logged_in = true;
+      setTimeout(() => closeModal(root), 500);
+      views.settings();
+    } catch (e) { pm.textContent = "⚠️ " + (e.message || e); }
+  });
+}
 
 /* ============ 启动 ============ */
 window.addEventListener("hashchange", route);

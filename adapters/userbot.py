@@ -13,37 +13,107 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import Callable
+from typing import Callable, Optional
+
+from urllib.parse import urlparse
 
 from adapters.web_scraper import ChannelMessage, extract_links, link_key
 
 log = logging.getLogger(__name__)
 
 
-class UserbotSource:
-    """基于 Telethon 的实时频道监听。"""
+def parse_proxy(url: str) -> Optional[dict]:
+    """把 http/https/socks5 代理 URL 转成 Telethon 需要的 dict 形式。
 
-    def __init__(self, api_id: str, api_hash: str, session: str, channels: list[str]) -> None:
+    Telethon 的 TelegramClient(proxy=...) 只认 dict（proxy_type/addr/port），
+    不接受 'http://host:port' 这种字符串，这里做个转换。传入空串则返回 None。
+    """
+    if not url:
+        return None
+    p = urlparse(url)
+    scheme = (p.scheme or "").lower()
+    if scheme in ("socks5", "socks5h"):
+        ptype = "socks5"
+    elif scheme == "socks4":
+        ptype = "socks4"
+    elif scheme in ("http", "https"):
+        ptype = "http"
+    else:
+        ptype = "http"
+    return {"proxy_type": ptype, "addr": p.hostname or "127.0.0.1", "port": p.port or 1080}
+
+
+class UserbotSource:
+    """基于 Telethon 的实时频道监听。
+
+    登录走网页「系统设置 → Telegram 账号」的接口（手机+验证码），
+    登录态保存在 session 文件里；本类只负责连接并实时收消息。
+    """
+
+    def __init__(self, api_id: str, api_hash: str, session: str, channels: list[str], proxy: str = "") -> None:
         try:
-            from telethon import TelegramClient
+            from telethon import TelegramClient  # noqa: F401
         except ImportError as exc:  # 未安装 telethon 时给出友好提示
             raise RuntimeError(
                 "使用 userbot 需先安装 telethon：pip install telethon"
             ) from exc
-        self._TelegramClient = TelegramClient
         self.api_id = api_id
         self.api_hash = api_hash
         self.session = session
         self.channels = [c.lstrip("@").strip("/") for c in channels if c]
+        self.proxy = parse_proxy(proxy)
+        self._client = None
         self._handlers: list[Callable[[ChannelMessage], None]] = []
 
     def on_message(self, cb: Callable[[ChannelMessage], None]) -> None:
         self._handlers.append(cb)
 
+    # ---------- 登录流程（供网页接口调用，非交互式）----------
+
+    def make_client(self):
+        from telethon import TelegramClient
+        return TelegramClient(self.session, self.api_id, self.api_hash, proxy=self.proxy)
+
+    async def connect(self):
+        self._client = self.make_client()
+        await self._client.connect()
+        return self._client
+
+    async def send_code(self, phone: str):
+        return await self._client.send_code_request(phone)
+
+    async def sign_in_code(self, phone: str, code: str, phone_code_hash: str):
+        # 成功返回 User；需要 2FA 时抛出 SessionPasswordNeededError
+        return await self._client.sign_in(phone, code, phone_code_hash=phone_code_hash)
+
+    async def sign_in_password(self, password: str):
+        return await self._client.sign_in(password=password)
+
+    async def is_authorized(self) -> bool:
+        if self._client is None:
+            self._client = self.make_client()
+            await self._client.connect()
+        return await self._client.is_user_authorized()
+
+    async def get_me(self):
+        return await self._client.get_me()
+
+    async def disconnect(self) -> None:
+        if self._client is not None:
+            try:
+                await self._client.disconnect()
+            except Exception:
+                pass
+
+    # ---------- 监听（监控进程调用）----------
+
     async def _worker(self) -> None:
-        client = self._TelegramClient(self.session, self.api_id, self.api_hash)
-        await client.start()
-        log.info("Userbot 已登录（%s）", self.session)
+        client = self.make_client()
+        await client.connect()
+        if not await client.is_user_authorized():
+            log.warning("Userbot 未登录，请先在网页「系统设置 → Telegram 账号」完成登录")
+            return
+        self._client = client
 
         # 解析频道实体
         entities = []
@@ -73,6 +143,7 @@ class UserbotSource:
                     log.warning("处理消息失败: %s", exc)
 
         if entities:
+            from telethon import events
             client.add_event_handler(handler, events.NewMessage(chats=entities))
         else:
             log.warning("没有可监听的频道实体，userbot 将以空转方式保持连接")
@@ -82,10 +153,3 @@ class UserbotSource:
 
     def run(self) -> None:
         asyncio.run(self._worker())
-
-
-# 避免未使用导入告警（events 在闭包内延迟引用）
-try:
-    from telethon import events  # noqa: F401
-except ImportError:
-    pass

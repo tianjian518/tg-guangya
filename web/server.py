@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import asyncio
 import threading
 import time
 import zipfile
@@ -41,6 +42,7 @@ from core.config import AppConfig  # noqa: E402
 from core.guangya import GuangyaClient, GuangyaError  # noqa: E402
 from core.store import Store  # noqa: E402
 from core.data_dir import resolve_config_path, get_data_dir, resolve_rel  # noqa: E402
+from adapters.userbot import UserbotSource  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("web")
@@ -433,6 +435,11 @@ def get_settings():
             "cache_ttl": cfg.dedup.cache_ttl,
             "upgrade": cfg.dedup.upgrade,
         },
+        "telegram": {
+            "api_id": cfg.telegram.api_id,
+            "api_hash": cfg.telegram.api_hash,
+            "session": cfg.telegram.session,
+        },
     }
 
 
@@ -440,6 +447,119 @@ def get_settings():
 def put_settings(body: dict):
     cfg.apply_settings(body)
     cfg.save(str(CONFIG_PATH))
+    return {"ok": True}
+
+
+# ---------- Telegram Userbot 登录（网页流程：手机 + 验证码）----------
+# 登录走后台常驻事件循环：Telethon 的异步方法必须在同一个 loop 上跑，
+# 而 HTTP 请求是分多次的（发码 → 填码 → 可能填 2FA 密码），所以用一个
+# 守护线程里的 event loop 来承载，避免「每次 asyncio.run 都新建 loop」导致的冲突。
+_userbot_pending: dict = {}
+_userbot_loop = None
+_userbot_loop_thread = None
+
+
+def _ub_loop():
+    global _userbot_loop, _userbot_loop_thread
+    if _userbot_loop is None or _userbot_loop.is_closed():
+        _userbot_loop = asyncio.new_event_loop()
+        _userbot_loop_thread = threading.Thread(target=_userbot_loop.run_forever, daemon=True)
+        _userbot_loop_thread.start()
+    return _userbot_loop
+
+
+def _ub_run(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _ub_loop()).result()
+
+
+def _build_userbot_source() -> UserbotSource:
+    return UserbotSource(
+        cfg.telegram.api_id, cfg.telegram.api_hash,
+        cfg.telegram.session, list(cfg.source.channels), proxy=cfg.source.proxy,
+    )
+
+
+@app.get("/api/userbot/status")
+def userbot_status():
+    if not cfg.telegram.api_id or not cfg.telegram.api_hash:
+        return {"logged_in": False, "error": "请先在设置里填写 api_id / api_hash"}
+    src = _build_userbot_source()
+    try:
+        authed = _ub_run(src.is_authorized())
+    except Exception as exc:
+        return {"logged_in": False, "error": str(exc)}
+    return {"logged_in": bool(authed)}
+
+
+@app.post("/api/userbot/login/start")
+def userbot_login_start(body: dict):
+    phone = str(body.get("phone") or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="请填写手机号（含国家区号，如 +8613800138000）")
+    if not cfg.telegram.api_id or not cfg.telegram.api_hash:
+        raise HTTPException(status_code=400, detail="请先在「系统设置 → Telegram 账号」填写 api_id / api_hash")
+    src = _build_userbot_source()
+    try:
+        _ub_run(src.connect())
+        sent = _ub_run(src.send_code(phone))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"发送验证码失败：{exc}")
+    _userbot_pending[cfg.telegram.session] = {
+        "phone": phone, "phone_code_hash": sent.phone_code_hash, "src": src,
+    }
+    return {"status": "code_sent", "phone": phone}
+
+
+@app.post("/api/userbot/login/code")
+def userbot_login_code(body: dict):
+    from telethon.errors import SessionPasswordNeededError
+    code = str(body.get("code") or "").strip()
+    pend = _userbot_pending.get(cfg.telegram.session)
+    if not pend:
+        raise HTTPException(status_code=400, detail="登录会话已失效，请重新点击登录")
+    src = pend["src"]
+    try:
+        _ub_run(src.sign_in_code(pend["phone"], code, pend["phone_code_hash"]))
+    except SessionPasswordNeededError:
+        return {"status": "password_needed"}
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"验证码错误：{exc}")
+    _finalize_userbot_login(src)
+    return {"status": "success"}
+
+
+@app.post("/api/userbot/login/password")
+def userbot_login_password(body: dict):
+    pwd = str(body.get("password") or "").strip()
+    pend = _userbot_pending.get(cfg.telegram.session)
+    if not pend:
+        raise HTTPException(status_code=400, detail="登录会话已失效，请重新点击登录")
+    src = pend["src"]
+    try:
+        _ub_run(src.sign_in_password(pwd))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"密码错误：{exc}")
+    _finalize_userbot_login(src)
+    return {"status": "success"}
+
+
+def _finalize_userbot_login(src: UserbotSource) -> None:
+    # Telethon 在 sign_in 成功并 disconnect 时会把登录态写入 session 文件
+    try:
+        _ub_run(src.disconnect())
+    except Exception:
+        pass
+    _userbot_pending.pop(cfg.telegram.session, None)
+
+
+@app.post("/api/userbot/logout")
+def userbot_logout():
+    try:
+        p = Path(cfg.telegram.session)
+        if p.exists():
+            p.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"退出失败：{exc}")
     return {"ok": True}
 
 

@@ -327,3 +327,8 @@ class AppConfig:
             self.scan_history = bool(s["scan_history"])
         if "history_pages" in s:
             self.history_pages = max(1, int(s["history_pages"]))
+        tg = s.get("telegram") or {}
+        if "api_id" in tg:
+            self.telegram.api_id = str(tg["api_id"]).strip()
+        if "api_hash" in tg:
+            self.telegram.api_hash = str(tg["api_hash"]).strip()

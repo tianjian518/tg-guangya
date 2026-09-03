@@ -277,6 +277,7 @@ def run_userbot(cfg: AppConfig, handler) -> None:
     src = UserbotSource(
         cfg.telegram.api_id, cfg.telegram.api_hash,
         cfg.telegram.session, cfg.source.channels,
+        proxy=cfg.source.proxy,
     )
     src.on_message(handler)
     src.run()
