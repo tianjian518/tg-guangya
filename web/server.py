@@ -118,7 +118,7 @@ _reload_state(CONFIG_PATH)
 _worker_proc: subprocess.Popen | None = None
 _login_sessions: dict[str, dict] = {}  # device_code -> {device_code, interval, expires_at}
 
-app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.8")
+app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.9")
 
 
 # ---------- 工具 ----------
@@ -175,7 +175,7 @@ def api_status():
         "worker_running": _worker_proc is not None and _worker_proc.poll() is None,
         "stats": stats,
         "data_dir": str(get_data_dir()),
-        "version": "1.0.8",
+        "version": "1.0.9",
     }
 
 
@@ -307,7 +307,7 @@ def backup_download():
             z.write(f, arcname=f.name)
         manifest = {
             "app": "tg-guangya",
-            "version": "1.0.8",
+            "version": "1.0.9",
             "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "data_dir": str(get_data_dir()),
             "files": [f.name for f in files],
