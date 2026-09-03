@@ -44,7 +44,7 @@ if str(BASE) not in sys.path:
 from core.config import AppConfig  # noqa: E402
 from core.guangya import GuangyaClient, GuangyaError  # noqa: E402
 from core.store import Store  # noqa: E402
-from core.data_dir import resolve_config_path, get_data_dir, resolve_rel  # noqa: E402
+from core.data_dir import resolve_config_path, get_data_dir, resolve_rel, REPO_BASE  # noqa: E402
 from adapters.userbot import UserbotSource  # noqa: E402
 from adapters.web_scraper import WebScraper  # noqa: E402
 
@@ -482,6 +482,24 @@ def prune_channels():
         cfg.source.channels = [c for c in channels if str(c).strip().lower() not in drop]
         cfg.save(str(CONFIG_PATH))
     return {"removed": zero, "kept": len(cfg.source.channels), "total": len(channels)}
+
+
+@app.post("/api/channels/reset")
+def reset_channels_to_curated():
+    """一键恢复为仓库内置的精选影视频道（28 个已实测出片的频道），清掉自动发现扒来的噪音频道。
+
+    会写回配置文件（/data/config.yaml）。调用后需「停止监听 → 启动监听」让新列表生效。
+    """
+    example = REPO_BASE / "config.example.yaml"
+    if not example.exists():
+        raise HTTPException(status_code=500, detail="找不到示例配置 config.example.yaml")
+    ex = AppConfig.load(str(example))
+    curated = list(ex.source.channels or [])
+    if not curated:
+        raise HTTPException(status_code=500, detail="示例配置里没有精选频道")
+    cfg.source.channels = curated
+    cfg.save(str(CONFIG_PATH))
+    return {"channels": curated, "total": len(curated)}
 
 
 # ---------- Telegram Userbot 登录（网页流程：手机 + 验证码）----------

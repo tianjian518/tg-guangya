@@ -509,6 +509,7 @@ async function renderTab() {
       <label><input type="checkbox" id="rt-disc" ${(S.discovery && S.discovery.enabled) ? "checked" : ""} style="width:auto"> 启用自动发现（从种子源自动扩充频道库）</label>
       <p class="hint">⚠️ 自动发现会从聚合页里扒频道名自动加进配置。新手建议关闭；若开启，系统的「零产出自动剔除」会清掉长期不发链接的噪音频道，否则噪音越积越多、拖慢抓取还易触发限流。</p>
       <button class="btn" id="rt-prune" style="margin-top:8px">🧹 清理无效频道（移除长期 0 链接的噪音频道）</button>
+      <button class="btn primary" id="rt-reset" style="margin-top:8px; margin-left:8px">⭐ 恢复精选频道(28)</button>
       <div id="rt-prune-out" class="hint" style="margin-top:8px"></div>
       <label style="font-weight:600">转存去重</label>
       <label><input type="checkbox" id="dd-cloud" ${(S.dedup && S.dedup.cloud_check_new) ? "checked" : ""} style="width:auto"> 云端复查（强烈建议开启）</label>
@@ -551,6 +552,20 @@ async function renderTab() {
           S.sources.channels = (S.sources.channels || []).filter((c) => !(r.removed || []).includes(c));
         }
       } catch (e) { $("#rt-prune-out").textContent = "清理失败：" + e.message; }
+      finally { btn.disabled = false; }
+    });
+
+    $("#rt-reset")?.addEventListener("click", async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      $("#rt-prune-out").textContent = "恢复中…";
+      try {
+        const r = await api("POST", "/channels/reset");
+        $("#rt-prune-out").innerHTML =
+          `✅ 已恢复为 ${r.total} 个精选频道：<br>${esc((r.channels || []).join("、"))}` +
+          `<br><span class="muted">改完需「停止监听 → 启动监听」让新列表生效。</span>`;
+        S.sources.channels = r.channels || [];  // 同步前端，避免再次保存时把噪音频道写回
+      } catch (e) { $("#rt-prune-out").textContent = "恢复失败：" + e.message; }
       finally { btn.disabled = false; }
     });
   } else if (state.tab === "notify") {

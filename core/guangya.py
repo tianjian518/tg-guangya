@@ -92,6 +92,14 @@ class OfflineTask:
 class GuangyaClient:
     """光鸭云盘客户端，自动管理令牌刷新。"""
 
+    # 任务状态码（与模块级常量保持一致，供 GuangyaClient.STATUS_* 访问）
+    STATUS_PENDING = STATUS_PENDING
+    STATUS_RUNNING = STATUS_RUNNING
+    STATUS_SUCCESS = STATUS_SUCCESS
+    STATUS_FAILED = STATUS_FAILED
+    STATUS_RETRYING = STATUS_RETRYING
+    STATUS_FAILED_ALT = STATUS_FAILED_ALT
+
     def __init__(
         self,
         access_token: str = "",
