@@ -347,5 +347,6 @@ docker run -d --name tg-guangya \
 
 > 也可直接从 Docker Hub 拉镜像：`docker pull tianjian518/tg-guangya:latest`。
 > 镜像由 GitHub Actions 在每次推送到 `main` 或打 `v*.*.*` tag 时自动构建并推送（见 `.github/workflows/docker.yml`），
+> 同时构建 **amd64 / arm64** 双架构（树莓派、群晖 ARM、飞牛、Apple Silicon 等均可直接 `docker pull`），
 > 需要仓库 Secrets 配置 `DOCKERHUB_USERNAME` 与 `DOCKERHUB_TOKEN`。
 
