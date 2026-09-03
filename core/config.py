@@ -24,6 +24,7 @@ class SourceConfig:
     type: str = "web"          # web | userbot
     channels: list[str] = field(default_factory=list)
     poll_interval: int = 120
+    proxy: str = ""            # HTTP/HTTPS 代理地址，如 http://127.0.0.1:7890
 
 
 @dataclass
@@ -115,6 +116,7 @@ class AppConfig:
             type=str(s.get("type", "web")).strip().lower(),
             channels=[str(c).strip() for c in (s.get("channels") or []) if c],
             poll_interval=int(s.get("poll_interval", 120)),
+            proxy=str(s.get("proxy", "")).strip(),
         )
         fl = raw.get("filter") or {}
         cfg.filter = FilterConfig(
@@ -214,6 +216,7 @@ class AppConfig:
                 "type": self.source.type,
                 "channels": list(self.source.channels),
                 "poll_interval": self.source.poll_interval,
+                "proxy": self.source.proxy,
             },
             "filter": {
                 "include_keywords": list(self.filter.include_keywords),
