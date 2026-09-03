@@ -72,9 +72,45 @@ def _reload_state(config_path: Path) -> None:
     global cfg, client, store
     c = AppConfig.load(str(config_path))
     _apply_data_paths(c)
+    # 先关掉旧库连接，避免反复重载导致 sqlite 连接泄漏
+    old = globals().get("store")
+    if old is not None:
+        try:
+            old.close()
+        except Exception:
+            pass
     cfg = c
     client = _make_client(cfg, config_path)
     store = Store(cfg.storage_db)
+
+
+_cfg_mtime = 0.0
+
+
+def _sync_config_if_changed() -> None:
+    """配置被别的进程改过就重新加载。
+
+    面板用子进程拉起 main.py 做监听，而「频道自动发现」是 main.py 里的后台线程，
+    它追加频道时只写配置文件、改的是**自己进程**的内存；面板进程的内存配置不会变，
+    于是页面上频道数一直停在旧值（看起来像「没自动添加」，其实文件里早写进去了）。
+    这里在读配置的接口里比对文件修改时间，变了就重载一次。
+    """
+    global _cfg_mtime
+    try:
+        mtime = os.path.getmtime(str(CONFIG_PATH))
+    except OSError:
+        return
+    if _cfg_mtime == 0.0:  # 首次只记录，不触发重载
+        _cfg_mtime = mtime
+        return
+    if mtime == _cfg_mtime:
+        return
+    _cfg_mtime = mtime
+    try:
+        _reload_state(CONFIG_PATH)
+        log.info("检测到配置文件被更新，已重新加载：频道 %d 个", len(cfg.source.channels))
+    except Exception as exc:
+        log.warning("配置自动重载失败: %s", exc)
 
 
 # ---------- 全局状态 ----------
@@ -82,7 +118,7 @@ _reload_state(CONFIG_PATH)
 _worker_proc: subprocess.Popen | None = None
 _login_sessions: dict[str, dict] = {}  # device_code -> {device_code, interval, expires_at}
 
-app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.5")
+app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.7")
 
 
 # ---------- 工具 ----------
@@ -122,6 +158,7 @@ def index():
 # ---------- 状态 ----------
 @app.get("/api/status")
 def api_status():
+    _sync_config_if_changed()
     logged_in = bool(client.token)
     try:
         stats = store.stats()
@@ -138,7 +175,7 @@ def api_status():
         "worker_running": _worker_proc is not None and _worker_proc.poll() is None,
         "stats": stats,
         "data_dir": str(get_data_dir()),
-        "version": "1.0.5",
+        "version": "1.0.7",
     }
 
 
@@ -270,7 +307,7 @@ def backup_download():
             z.write(f, arcname=f.name)
         manifest = {
             "app": "tg-guangya",
-            "version": "1.0.5",
+            "version": "1.0.7",
             "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "data_dir": str(get_data_dir()),
             "files": [f.name for f in files],
@@ -357,6 +394,7 @@ async def backup_restore(file: UploadFile = File(...)):
 # ---------- 设置 ----------
 @app.get("/api/settings")
 def get_settings():
+    _sync_config_if_changed()
     return {
         "sources": {
             "type": cfg.source.type,
@@ -442,6 +480,7 @@ def api_history(limit: int = 50, status: str = ""):
 # ---------- 频道管理 ----------
 @app.get("/api/channels")
 def list_channels():
+    _sync_config_if_changed()
     return {"channels": list(cfg.source.channels)}
 
 
