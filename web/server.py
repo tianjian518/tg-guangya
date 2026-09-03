@@ -81,17 +81,26 @@ _reload_state(CONFIG_PATH)
 _worker_proc: subprocess.Popen | None = None
 _login_sessions: dict[str, dict] = {}  # device_code -> {device_code, interval, expires_at}
 
-app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.3")
+app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.4")
 
 
 # ---------- 工具 ----------
 def _qr_data_url(url: str) -> str:
-    import qrcode
+    """生成二维码的 data URL。
 
-    img = qrcode.make(url)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    生成失败（如容器缺 Pillow）时返回空串，由前端改用授权链接兜底，
+    避免整个扫码登录接口 500 掉。
+    """
+    try:
+        import qrcode
+
+        img = qrcode.make(url)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception as exc:
+        log.warning("生成二维码图片失败（前端将改用授权链接兜底）: %s", exc)
+        return ""
 
 
 def _client_safe() -> GuangyaClient:
@@ -128,7 +137,7 @@ def api_status():
         "worker_running": _worker_proc is not None and _worker_proc.poll() is None,
         "stats": stats,
         "data_dir": str(get_data_dir()),
-        "version": "1.0.3",
+        "version": "1.0.4",
     }
 
 
@@ -260,7 +269,7 @@ def backup_download():
             z.write(f, arcname=f.name)
         manifest = {
             "app": "tg-guangya",
-            "version": "1.0.3",
+            "version": "1.0.4",
             "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "data_dir": str(get_data_dir()),
             "files": [f.name for f in files],
@@ -524,20 +533,33 @@ def login_manual(body: dict):
     """
     access = str(body.get("access_token") or "").strip()
     refresh = str(body.get("refresh_token") or "").strip()
-    if not access:
-        raise HTTPException(status_code=400, detail="access_token 不能为空")
+    if not access and not refresh:
+        raise HTTPException(status_code=400, detail="访问令牌与刷新令牌至少要填一个")
     tmp = GuangyaClient(
         access_token=access, refresh_token=refresh,
         client_id=cfg.guangya.client_id, device_id=cfg.guangya.device_id,
     )
+    # access_token 由光鸭签发、有效期只有 2 小时，从别的工具里粘过来的往往早已过期
+    # （服务端返回 401 token expiry）。所以只要带了 refresh_token，就先换发一次新令牌
+    # 再校验——刷新成功即视为登录成功，不必要求 access 本身还有效。
+    if refresh:
+        try:
+            tmp.refresh()
+        except GuangyaError as exc:
+            log.error("用 refresh_token 换发新令牌失败: %s", exc)
+            raise HTTPException(
+                status_code=401,
+                detail=f"令牌校验失败：{exc}（刷新令牌可能已失效，请重新扫码登录）",
+            )
     try:
         info = tmp.me()
     except GuangyaError as exc:
+        log.error("令牌校验（/v1/user/me）失败: %s", exc)
         raise HTTPException(status_code=401, detail=f"令牌校验失败：{exc}")
-    # 校验通过，写入配置
-    cfg.guangya.access_token = access
-    cfg.guangya.refresh_token = refresh
-    cfg.save_token(access, refresh, str(CONFIG_PATH))
+    # 写入的是刷新后的令牌（access 已换新，refresh 也可能被服务端轮换）
+    cfg.guangya.access_token = tmp.token or access
+    cfg.guangya.refresh_token = tmp.refresh_value or refresh
+    cfg.save_token(cfg.guangya.access_token, cfg.guangya.refresh_token, str(CONFIG_PATH))
     global client
     client = tmp
     return {"ok": True, "account": info}
