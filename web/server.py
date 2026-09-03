@@ -25,6 +25,7 @@ import threading
 import time
 import zipfile
 from pathlib import Path
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, File, UploadFile
@@ -587,7 +588,7 @@ def folders(parent_id: str = ""):
 
 # ---------- 转存任务（实时读取光鸭）----------
 @app.get("/api/tasks")
-def tasks(status: int | None = None):
+def tasks(status: Optional[int] = None):
     c = _client_safe()
     try:
         items = c.list_tasks(statuses=[status] if status is not None else None)
