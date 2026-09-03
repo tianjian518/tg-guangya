@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TG → 光鸭 自动转存</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logo">🦆</div>
+        <div>TG → 光鸭</div>
+      </div>
+      <nav class="nav">
+        <a href="#/dashboard" data-route="dashboard"><span class="ico">📊</span> 概览</a>
+        <a href="#/tasks" data-route="tasks"><span class="ico">📥</span> 转存任务</a>
+        <a href="#/channels" data-route="channels"><span class="ico">📺</span> 频道管理</a>
+        <a href="#/history" data-route="history"><span class="ico">🗂️</span> 监控历史</a>
+        <div class="spacer"></div>
+        <div class="bottom">
+          <a href="#/settings" data-route="settings"><span class="ico">⚙️</span> 系统设置</a>
+        </div>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <h1 id="page-title">概览</h1>
+        <div class="right">
+          <span id="login-badge" class="badge dim"><span class="dot"></span> 未登录</span>
+          <span id="worker-badge" class="badge dim"><span class="dot"></span> 未运行</span>
+        </div>
+      </div>
+      <div class="content" id="content"><!-- 动态渲染 --></div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <div id="modal-root"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

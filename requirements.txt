@@ -1,0 +1,16 @@
+# 核心依赖（必须）
+requests>=2.28
+PyYAML>=6.0
+
+# 扫码登录生成二维码（必须；若不生成图片也可手开链接）
+qrcode>=7.3
+
+# Web 管理面板（必须）
+fastapi>=0.103
+uvicorn>=0.23
+
+# 可选：影视文件名智能解析（不装也能跑，仅退化为简单规则）
+guessit>=3.7
+
+# 可选：userbot 实时监听模式（sources.type=userbot 时才需要）
+telethon>=1.30

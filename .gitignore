@@ -1,0 +1,28 @@
+# ===== 密钥与本地数据（绝不入库）=====
+config.yaml
+*.db
+*.sqlite
+*.sqlite3
+*.session
+*.bak
+data/
+web/worker.log
+web/login_qr.png
+.restore_tmp.yaml
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ===== 系统/编辑器 =====
+.DS_Store
+.idea/
+.vscode/
+Thumbs.db
+
+# ===== 本地覆盖 =====
+.env

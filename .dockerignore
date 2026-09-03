@@ -1,0 +1,14 @@
+# 容器构建时忽略（不进镜像，也避免把本地数据带进去）
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+data
+*.db
+*.session
+*.bak
+web/worker.log
+web/login_qr.png
+.restore_tmp.yaml
+.DS_Store
