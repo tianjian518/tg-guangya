@@ -1,5 +1,11 @@
 # 更新日志
 
+## v1.0.1（2026-09-03）
+
+- **修复**：`requirements.txt` 补充 `python-multipart` 依赖。缺失会导致容器启动时
+  `/api/backup/restore` 路由注册失败、面板起不来（报错 `Form data requires "python-multipart"`）。
+  感谢 ARM 版甲骨文 + 飞牛环境实测发现。
+
 ## v1.0.0（2026-09-03）
 
 首个完整可用版本，正式开源发布。

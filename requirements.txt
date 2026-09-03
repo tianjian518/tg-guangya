@@ -8,6 +8,7 @@ qrcode>=7.3
 # Web 管理面板（必须）
 fastapi>=0.103
 uvicorn>=0.23
+python-multipart>=0.0.9   # 备份还原的文件上传（multipart/form-data）必须依赖
 
 # 可选：影视文件名智能解析（不装也能跑，仅退化为简单规则）
 guessit>=3.7
