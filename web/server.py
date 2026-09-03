@@ -10,6 +10,9 @@
 """
 from __future__ import annotations
 
+# ---------- 版本号（单一来源，改这一处即可） ----------
+__version__ = "1.0.12"
+
 import argparse
 import base64
 import datetime
@@ -121,7 +124,7 @@ _reload_state(CONFIG_PATH)
 _worker_proc: subprocess.Popen | None = None
 _login_sessions: dict[str, dict] = {}  # device_code -> {device_code, interval, expires_at}
 
-app = FastAPI(title="TG → 光鸭 自动转存", version="1.0.9")
+app = FastAPI(title="TG → 光鸭 自动转存", version=__version__)
 
 
 # ---------- 工具 ----------
@@ -178,7 +181,7 @@ def api_status():
         "worker_running": _worker_proc is not None and _worker_proc.poll() is None,
         "stats": stats,
         "data_dir": str(get_data_dir()),
-        "version": "1.0.9",
+        "version": __version__,
     }
 
 
@@ -310,7 +313,7 @@ def backup_download():
             z.write(f, arcname=f.name)
         manifest = {
             "app": "tg-guangya",
-            "version": "1.0.9",
+            "version": __version__,
             "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
             "data_dir": str(get_data_dir()),
             "files": [f.name for f in files],
