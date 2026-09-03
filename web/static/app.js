@@ -645,8 +645,7 @@ function openLoginModal() {
   $("#tk-save").addEventListener("click", async () => {
     const access = $("#tk-access").value.trim();
     const refresh = $("#tk-refresh").value.trim();
-    if (!access) { tkMsg.textContent = "⚠️ 请填写访问令牌"; return; }
-    if (!refresh) { tkMsg.textContent = "⚠️ 请填写刷新令牌（用于自动续期，访问令牌 2 小时就过期）"; return; }
+    if (!access && !refresh) { tkMsg.textContent = "⚠️ 请至少填写刷新令牌（访问令牌只有 2 小时有效期，靠刷新令牌自动续期，过期的访问令牌也能自动换发）"; return; }
     tkMsg.textContent = "校验中…";
     try {
       const r = await api("POST", "/guangya/login/manual", { access_token: access, refresh_token: refresh });
@@ -661,7 +660,12 @@ function openLoginModal() {
   if (details) details.addEventListener("toggle", () => {
     if (details.open && !$("#qr-img").src) {
       api("POST", "/guangya/login/start").then((info) => {
-        $("#qr-img").src = info.qr_data_url;
+        if (info.qr_data_url) {
+          $("#qr-img").src = info.qr_data_url;
+        } else {
+          const im = $("#qr-img"); if (im) im.style.display = "none";
+          const el = $("#qr-err"); if (el) el.textContent = "二维码图片生成失败，请点下方链接在浏览器里完成授权";
+        }
         $("#qr-link").href = info.qr_url;
         let live = true;
         const iv = setInterval(async () => {
