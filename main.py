@@ -59,21 +59,44 @@ def build_client(cfg: AppConfig, config_path: str) -> GuangyaClient:
     )
 
 
-def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int) -> tuple[bool, str, str]:
-    """提交单个链接到光鸭离线下载。返回 (ok, task_id, message)。"""
+_OFFLINE_WAIT_TIMEOUT = 180   # 离线任务最多等 3 分钟（光鸭解析通常几十秒内完成）
+_OFFLINE_POLL_INTERVAL = 15   # 轮询间隔秒数
+_TASK_MONITOR_INTERVAL = 60   # 后台监控线程检查间隔
+
+
+def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int) -> tuple[bool, str, str, str]:
+    """提交单个链接到光鸭离线下载。
+
+    返回 (ok, task_id, name, final_status_text)。
+    提交后会等待离线任务完成（最多 _OFFLINE_WAIT_TIMEOUT 秒），
+    超时或失败时仍返回 ok=True（因为任务已创建，只是未完成）。
+    """
     last_err = ""
     for attempt in range(1, max_retries + 1):
         try:
             task_id, name = client.create_offline_task(url, parent_id)
-            return True, task_id, name
+            # 等待任务完成：解析资源通常很快，超过 3 分钟说明已经卡住
+            log.info("提交离线任务 %s，等待完成（最多 %ds）...", task_id, _OFFLINE_WAIT_TIMEOUT)
+            status_code, msg = client.wait_offline_task(
+                task_id, timeout=_OFFLINE_WAIT_TIMEOUT, poll_interval=_OFFLINE_POLL_INTERVAL,
+            )
+            if status_code == GuangyaClient.STATUS_SUCCESS:
+                log.info("任务 %s 完成: %s", task_id, msg)
+                return True, task_id, name, "done"
+            if status_code in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
+                log.warning("任务 %s 失败: %s", task_id, msg)
+                return False, task_id, name, f"failed: {msg}"
+            # 超时或未结束：任务仍在进行中，视为提交成功
+            log.info("任务 %s 仍在进行中: %s", task_id, msg)
+            return True, task_id, name, "pending"
         except GuangyaError as exc:
             last_err = str(exc)
             low = last_err.lower()
             if "次数" in last_err or "限额" in last_err or "quota" in low:
-                return False, "", f"离线配额不足: {last_err}"
+                return False, "", f"离线配额不足: {last_err}", "quota_exceeded"
             if attempt < max_retries:
                 time.sleep(min(30, attempt * 5))
-    return False, "", last_err
+    return False, "", last_err, "error"
 
 
 def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
@@ -136,20 +159,75 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
             target, category = pick_target(msg.text)
-            ok2, task_id, msg_text = submit_one(client, url, target, max_retries)
+            ok2, task_id, name, final_status = submit_one(client, url, target, max_retries)
             if ok2:
-                store.update(h, status="upgraded" if is_upgrade else "submitted",
+                db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
+                store.update(h, status=db_status,
                              task_id=task_id, category=category)
                 parsed = parse_title(msg.text)
                 where = f"→ {category}" if category else ""
                 tag = "♻️ 洗版转存" if is_upgrade else "✅ 已转存"
-                log.info("%s %s: %s | 任务 %s", tag, where, parsed.get("title") or msg.text[:40], task_id)
+                if final_status == "done":
+                    tag += "（已完成）"
+                log.info("%s %s: %s | 任务 %s [%s]", tag, where, parsed.get("title") or msg.text[:40], task_id, final_status)
                 notifier.send(f"{tag} {where}: {msg.text[:70]} (任务 {task_id})")
             else:
                 store.update(h, status="failed", reason=msg_text)
                 log.warning("❌ 提交失败: %s | %s", msg.text[:50], msg_text)
                 notifier.send(f"❌ 失败: {msg.text[:60]} | {msg_text[:80]}")
     return handler
+
+
+def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) -> threading.Thread:
+    """后台线程：定期轮询所有 submitted 任务的状态，更新数据库记录。
+
+    解决「提交后任务实际失败但状态仍为 submitted」的问题——
+    主流程 submit_one 会等待（最多 180s），但超时的任务仍留在 submitted 状态，
+    此监控线程会持续检查直到它们进入 done/failed。
+    """
+    def _loop() -> None:
+        while True:
+            try:
+                # 只查 pending/running 的任务（不需要反复查已完成的）
+                pending_tasks = client.list_tasks(statuses=[0, 1, 4])
+                task_map = {t.task_id: t for t in pending_tasks}
+                if not task_map:
+                    time.sleep(_TASK_MONITOR_INTERVAL)
+                    continue
+                # 找出数据库中 submitted 且当前仍在列表中的任务
+                rows = store.history(limit=200)
+                updated = 0
+                for rec in rows:
+                    if rec.status not in ("submitted", "upgraded"):
+                        continue
+                    tid = (rec.task_id or "").strip()
+                    if tid not in task_map:
+                        # 任务已从光鸭侧清除（可能是用户手动删除），标记 failed
+                        store.update(tid, status="failed", reason="任务被清除（可能手动删除）")
+                        updated += 1
+                        continue
+                    t = task_map[tid]
+                    if t.status == GuangyaClient.STATUS_SUCCESS:
+                        store.update(tid, status="done")
+                        updated += 1
+                        log.info("任务 %s 已完成", tid)
+                    elif t.status in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
+                        store.update(tid, status="failed", reason=t.message or "离线下载失败")
+                        updated += 1
+                        log.warning("任务 %s 失败: %s", tid, t.message)
+                    elif t.status == GuangyaClient.STATUS_RUNNING:
+                        # 仍在下载，不更新
+                        pass
+                if updated:
+                    log.info("任务状态监控更新 %d 条记录", updated)
+            except Exception as exc:
+                log.warning("任务监控循环异常: %s", exc)
+            time.sleep(_TASK_MONITOR_INTERVAL)
+
+    t = threading.Thread(target=_loop, daemon=True, name="task_monitor")
+    t.start()
+    log.info("任务状态监控已启动（间隔 %ds）", _TASK_MONITOR_INTERVAL)
+    return t
 
 
 def start_discovery(cfg: AppConfig, config_path: str, scraper: WebScraper | None = None) -> ChannelDiscovery | None:
@@ -266,6 +344,9 @@ def main() -> None:
 
     # 后台自动发现频道（web / userbot 模式通用，只往配置里加）
     disc = start_discovery(cfg, args.config, scraper=source_obj)
+
+    # 后台任务状态监控（持续更新 submitted → done/failed）
+    task_monitor = start_task_monitor(store, client, notifier)
 
     log.info("配置加载完成 | 频道 %d 个 | 来源=%s | 自动发现=%s | 自动分类=%s",
              len(cfg.source.channels), cfg.source.type, "开" if disc else "关",
