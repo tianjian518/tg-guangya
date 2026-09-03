@@ -82,7 +82,7 @@ def merge_channels(live_path: Path, source_path: Path, dry_run: bool = False) ->
 
     live.setdefault("sources", {})
     live["sources"]["channels"] = merged
-    live_path.write_text(yaml.safe_dump(live, allow_unicode=True, sort_keys=False),
+    live_path.write_text(yaml.safe_dump(live, allow_unicode=True),
                          encoding="utf-8")
     print(f"✅ 已写回 {live_path}（令牌等其它设置保持不变）")
     return len(merged)
