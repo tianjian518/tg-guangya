@@ -46,6 +46,21 @@ STATUS_TEXT = {
     STATUS_FAILED_ALT: "失败",
 }
 
+# 目录列表排序参数（对齐 LitePan drivers/Guangya transport.go 的默认值，
+# 也与 OpenList 光鸭驱动配置里的 order_by=3 / sort_type=1 一致）
+LIST_ORDER_BY = 3
+LIST_SORT_TYPE = 1
+
+# 业务接口最小请求间隔（秒）。光鸭对高频调用会限流（HTTP 429 / 业务码 354），
+# LitePan 使用 defaultOperationDelayMS = 300 做同样的保护。
+OP_INTERVAL = 0.3
+
+# 光鸭的限流业务错误码（LitePan mapAPIError）
+CODE_RATE_LIMIT = 354
+# 异步任务（删除/移动/复制）状态：2=完成，-1/3/5=失败
+TASK_DONE = 2
+TASK_FAILED_STATUSES = (-1, 3, 5)
+
 
 class GuangyaError(Exception):
     """光鸭接口错误。"""
@@ -93,6 +108,7 @@ class GuangyaClient:
         self.on_token_change = on_token_change
         self.timeout = timeout
         self._expire_at = 0.0  # 令牌过期时间戳，0 表示未知
+        self._last_api_at = 0.0  # 上次业务请求时间，用于节流
         self._session = requests.Session()
 
     # ---------- 令牌 ----------
@@ -273,6 +289,8 @@ class GuangyaClient:
         if resp.status_code in (401, 403) and auth and retry and self._refresh:
             self.refresh()  # 令牌过期，刷一次重试
             return self._post(base, path, body, auth=auth, retry=False, headers=self._api_headers(auth))
+        if resp.status_code == 429:
+            raise GuangyaError("光鸭接口限流（HTTP 429），请稍后重试")
         if resp.status_code >= 400:
             raise GuangyaError(f"光鸭 HTTP {resp.status_code}: {resp.text[:200]}")
         try:
@@ -283,6 +301,8 @@ class GuangyaClient:
             # 账户接口（设备码 / 登录 / 刷新令牌 / me）直接返回内容，没有 success/data 信封；
             # 之前错误地拆了 data 层导致 device_code 拿不到、报「返回不完整」。
             return envelope
+        if isinstance(envelope.get("code"), int) and envelope["code"] == CODE_RATE_LIMIT:
+            raise GuangyaError(f"光鸭接口限流（{CODE_RATE_LIMIT}）：{envelope.get('msg') or '请稍后重试'}")
         # 业务接口信封：{code, msg, data:{...}}（部分接口也带 success 字段）
         code = envelope.get("code")
         if isinstance(code, int) and code != 0:
@@ -321,8 +341,16 @@ class GuangyaClient:
         return self._post(ACCOUNT_BASE, path, body, auth=False,
                           headers=self.build_account_headers(), raw=True)
 
+    def _throttle(self) -> None:
+        """业务接口节流：避免高频调用触发光鸭限流（HTTP 429 / 业务码 354）。"""
+        gap = time.time() - self._last_api_at
+        if 0 < gap < OP_INTERVAL:
+            time.sleep(OP_INTERVAL - gap)
+        self._last_api_at = time.time()
+
     def _api_post(self, path: str, body: dict) -> Any:
         self.ensure_token()
+        self._throttle()
         return self._post(API_BASE, path, body, auth=True, raw=False)
 
     # ---------- 业务接口 ----------
@@ -414,8 +442,8 @@ class GuangyaClient:
             "parentId": parent_id or "",
             "page": 0,
             "pageSize": page_size,
-            "orderBy": 1,
-            "sortType": 0,
+            "orderBy": LIST_ORDER_BY,
+            "sortType": LIST_SORT_TYPE,
         }
         data = self._api_post("/userres/v1/file/get_file_list", body) or {}
         out: list[dict] = []
@@ -460,19 +488,56 @@ class GuangyaClient:
             h["Authorization"] = "Bearer " + self._access
         return self._get(ACCOUNT_BASE, "/v1/user/me", headers=h, raw=True) or {}
 
+    def wait_task(self, task_id: str, timeout: int = 30) -> bool:
+        """等待光鸭异步任务（删除/移动/复制）完成。
+
+        这些接口会返回 taskId，需要轮询 /userres/v1/get_task_status，
+        status == 2 表示完成，-1/3/5 表示失败（对齐 LitePan ops.go waitTaskDone）。
+        返回 True 表示任务完成；超时返回 False。
+        """
+        task_id = (task_id or "").strip()
+        if not task_id:
+            return False
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                data = self._api_post(
+                    "/userres/v1/get_task_status", {"taskId": task_id}) or {}
+            except GuangyaError as exc:
+                log.warning("查询任务状态失败(%s): %s", task_id, exc)
+                return False
+            status = int(data.get("status") or 0)
+            if status == TASK_DONE:
+                return True
+            if status in TASK_FAILED_STATUSES:
+                raise GuangyaError(f"光鸭任务执行失败（状态码 {status}）")
+            time.sleep(OP_INTERVAL)
+        log.warning("等待光鸭任务超时: %s", task_id)
+        return False
+
     def delete_file(self, parent_id: str, file_id: str) -> None:
         """删除网盘里的文件/目录（用于洗版时替换旧版本）。
 
-        接口来自 LitePan drivers/Guangya 的 file 删除类操作，body 形如
-        {"parentId": "...", "fileIds": ["..."]}。删除为不可逆操作，调用前请确保
-        file_id 确实指向待替换的旧版本。失败时抛 GuangyaError。
+        接口（对齐 LitePan transport.go 的 pathDeleteFile）：
+          POST /userres/v1/file/delete_file   body {"fileIds": [...]}
+
+        注意两点（都经过实测确认）：
+        1. 路径是 **delete_file**。早期版本用的 /userres/v1/file/delete 实测返回
+           HTTP 404（接口根本不存在），会导致洗版时「旧的删不掉、新的又存一份」。
+        2. 删除是**异步任务**，返回 taskId，必须轮询等它完成，否则紧接着提交的
+           转存可能撞上还没删掉的旧文件。
+
+        另：光鸭默认把文件移到回收站（LitePan deleteMode 默认 trash），并非立即抹除。
         """
         if not file_id:
             raise GuangyaError("删除文件缺少 fileId")
-        self._api_post(
-            "/userres/v1/file/delete",
-            {"parentId": parent_id or "", "fileIds": [file_id]},
-        )
+        data = self._api_post(
+            "/userres/v1/file/delete_file",
+            {"fileIds": [file_id]},
+        ) or {}
+        task_id = (data.get("taskId") or "").strip()
+        if task_id:
+            self.wait_task(task_id)
         log.info("已删除光鸭文件: %s", file_id)
 
     def list_dir(self, parent_id: str = "", page_size: int = 200) -> list[dict]:
@@ -492,8 +557,8 @@ class GuangyaClient:
                 "parentId": parent_id or "",
                 "page": page,
                 "pageSize": page_size,
-                "orderBy": 1,
-                "sortType": 0,
+                "orderBy": LIST_ORDER_BY,
+                "sortType": LIST_SORT_TYPE,
             }
             data = self._api_post("/userres/v1/file/get_file_list", body) or {}
             lst = data.get("list") or []
