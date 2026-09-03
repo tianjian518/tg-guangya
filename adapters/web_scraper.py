@@ -159,28 +159,63 @@ class WebScraper:
         self,
         on_message: Callable[[ChannelMessage], None],
         stop_event=None,
+        max_consecutive_failures: int = 5,
     ) -> None:
-        """持续轮询所有频道，新消息交给 on_message 回调处理。"""
+        """持续轮询所有频道，新消息交给 on_message 回调处理。
+
+        max_consecutive_failures：连续失败此次数后自动剔除该频道。
+        """
         log.info("网页抓取已启动，%d 个频道，间隔 %ds", len(self.channels), self.interval)
         seen: dict[str, set[str]] = {c: set() for c in self.channels}
+        failures: dict[str, int] = {c: 0 for c in self.channels}  # 连续失败计数
         first_round = True
+        round_num = 0
         while True:
             if stop_event and stop_event.is_set():
                 break
-            for channel in self.channels:
+            round_num += 1
+            processed = 0
+            skipped_dead = 0
+            active_channels = [c for c in self.channels if failures.get(c, 0) < max_consecutive_failures]
+            if len(active_channels) != len(self.channels):
+                log.info(
+                    "第%d轮：剔除死频道 %d 个，活跃 %d/%d",
+                    round_num, len(self.channels) - len(active_channels),
+                    len(active_channels), len(self.channels),
+                )
+                self.channels = active_channels
+                failures = {c: failures[c] for c in active_channels}
+                seen = {c: seen[c] for c in active_channels}
+            for channel in active_channels:
                 try:
-                    for msg in self.fetch(channel):
-                        # 首轮只登记不处理，避免启动时把历史消息全灌进去
+                    msgs = self.fetch(channel)
+                    if not msgs:
+                        failures[channel] = failures.get(channel, 0) + 1
+                        if failures[channel] >= max_consecutive_failures:
+                            log.warning("频道 %s 连续 %d 次无响应，已剔除", channel, max_consecutive_failures)
+                        continue
+                    failures[channel] = 0  # 成功重置计数
+                    for msg in msgs:
                         if first_round:
                             seen[channel].add(msg.message_id)
+                            processed += 1
                             continue
                         if msg.message_id in seen[channel]:
                             continue
                         seen[channel].add(msg.message_id)
                         if msg.links:
                             on_message(msg)
+                            processed += 1
                 except Exception as exc:
-                    log.warning("轮询 %s 出错: %s", channel, exc)
+                    failures[channel] = failures.get(channel, 0) + 1
+                    if failures[channel] <= 2 or failures[channel] % 10 == 0:
+                        log.warning("轮询 %s 出错 (%d/%d): %s", channel, failures[channel], max_consecutive_failures, exc)
+            if first_round:
+                log.info("首轮扫描完成：%d 条消息登记", processed)
+            else:
+                log.info("第%d轮：%d 条新消息，活跃频道 %d/%d", round_num, processed,
+                         len([c for c in active_channels if failures.get(c, 0) < max_consecutive_failures]),
+                         len(active_channels))
             first_round = False
             time.sleep(self.interval)
 
