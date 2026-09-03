@@ -3,7 +3,10 @@
 不依赖真实光鸭服务器（沙箱网络受限），全部走内存假对象。
 """
 import sys, os
-sys.path.insert(0, os.path.dirname(__file__) + "/..")
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+BASE = Path(__file__).resolve().parent.parent
 
 from core.guangya import GuangyaClient
 from core.store import Store, MagnetRecord
@@ -51,7 +54,7 @@ class FakeGuangya:
 
 def build(cfg_overrides=None, cloud_files=None, upgrade=False):
     """构造一个测试实例：根目录 + 自动分类子树 + 可选预置云端文件。"""
-    cfg = AppConfig.load("config.yaml")
+    cfg = AppConfig.load(str(BASE / "data" / "config.yaml"))
     if cfg_overrides:
         for k, v in cfg_overrides.items():
             setattr(cfg, k, v)
@@ -116,7 +119,7 @@ def test_cases():
     results.append(("关云端复查/同片不同磁", "transfer", d.action))
 
     # 7) 未开启自动分类 → 单目录根查重
-    cfg = AppConfig.load("config.yaml")
+    cfg = AppConfig.load(str(BASE / "data" / "config.yaml"))
     cfg.organize.enabled = False
     c = FakeGuangya(); root = c.create_folder("", "TG转存"); c.dirs[root]["files"]["繁花.2023.1080p.mkv"] = 1
     clf = Classifier(); r2 = CategoryResolver(c, root_id=root, create_missing=False)
