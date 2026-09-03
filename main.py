@@ -73,28 +73,13 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     提交后会等待离线任务完成（最多 _OFFLINE_WAIT_TIMEOUT 秒），
     超时或失败时仍返回 ok=True（因为任务已创建，只是未完成）。
 
-    cn_title 为 Telegram 中文标题；若提供，会尝试把云盘文件名改成中文
-    （创建时指定 + 完成后 rename 双保险，任一生效即可）。
+    cn_title 为 Telegram 中文标题；若提供，会把离线下载生成的【外层文件夹】
+    （电影/剧集所在的目录）重命名为中文标题，里面的文件保持原名不动。
     """
     last_err = ""
     for attempt in range(1, max_retries + 1):
         try:
-            # 拿到原种子文件名以提取后缀，构造中文名
-            resolved = None
-            cn_name = ""
-            if cn_title:
-                try:
-                    resolved = client.resolve(url)
-                    orig = (resolved or {}).get("name", "")
-                    ext = orig.rsplit(".", 1)[-1].lower() if "." in orig else ""
-                    if not (ext and len(ext) <= 5):
-                        ext = ""
-                    cn_name = build_cn_filename(cn_title, ext)
-                except Exception:
-                    resolved = None
-                    cn_name = build_cn_filename(cn_title)
-            task_id, name = client.create_offline_task(
-                url, parent_id, cn_name=cn_name, resolved=resolved)
+            task_id, name = client.create_offline_task(url, parent_id)
             # 等待任务完成：解析资源通常很快，超过 3 分钟说明已经卡住
             log.info("提交离线任务 %s，等待完成（最多 %ds）...", task_id, _OFFLINE_WAIT_TIMEOUT)
             status_code, msg = client.wait_offline_task(
@@ -102,18 +87,27 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
             )
             if status_code == GuangyaClient.STATUS_SUCCESS:
                 log.info("任务 %s 完成: %s", task_id, msg)
-                # 双保险：若创建时未用中文名（光鸭忽略 fileName），任务完成后补 rename
-                if cn_name:
+                # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面文件）
+                if cn_title:
                     try:
-                        hit = next((t for t in client.list_tasks()
-                                    if t.task_id == task_id and t.file_id), None)
-                        if hit and hit.name != cn_name:
-                            client.rename_file(hit.file_id, cn_name)
-                            log.info("已重命名为中文: %s", cn_name)
-                        elif hit and hit.name == cn_name:
-                            log.info("创建时即已用中文名: %s", cn_name)
+                        cn_folder = build_cn_filename(cn_title)  # 无后缀，给文件夹用
+                        if cn_folder:
+                            hit = next((t for t in client.list_tasks()
+                                        if t.task_id == task_id and t.file_id), None)
+                            if hit:
+                                fid = hit.file_id
+                                # 校验 fid 指向的是文件夹（resType==2），避免误改里面的文件
+                                is_folder = any(
+                                    e["file_id"] == fid and e["res_type"] == 2
+                                    for e in client.list_dir(parent_id)
+                                )
+                                if is_folder:
+                                    client.rename_file(fid, cn_folder)
+                                    log.info("外层文件夹已重命名为中文: %s", cn_folder)
+                                else:
+                                    log.info("离线任务 fileId 非文件夹，跳过改名（保持文件原名）")
                     except GuangyaError as exc:
-                        log.warning("中文重命名失败（保留原名 %s）: %s", name, exc)
+                        log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
                 return True, task_id, name, "done"
             if status_code in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
                 log.warning("任务 %s 失败: %s", task_id, msg)
