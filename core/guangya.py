@@ -501,19 +501,54 @@ class GuangyaClient:
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
-                data = self._api_post(
-                    "/userres/v1/get_task_status", {"taskId": task_id}) or {}
+                self._throttle()
+                self.ensure_token()
+                data = self._post(
+                    API_BASE, "/userres/v1/get_task_status",
+                    {"taskId": task_id}, auth=True,
+                ) or {}
+                status = int(data.get("status") or 0)
+                if status == 2:
+                    return True
+                if status in (-1, 3, 5):
+                    return False
             except GuangyaError as exc:
-                log.warning("查询任务状态失败(%s): %s", task_id, exc)
+                log.warning("查询任务状态失败 %s: %s", task_id, exc)
                 return False
-            status = int(data.get("status") or 0)
-            if status == TASK_DONE:
-                return True
-            if status in TASK_FAILED_STATUSES:
-                raise GuangyaError(f"光鸭任务执行失败（状态码 {status}）")
-            time.sleep(OP_INTERVAL)
-        log.warning("等待光鸭任务超时: %s", task_id)
+            time.sleep(1)
         return False
+
+    def wait_offline_task(self, task_id: str, timeout: int = 120, poll_interval: int = 10) -> tuple[int, str]:
+        """等待离线下载任务完成，返回 (最终状态码, 消息)。
+
+        离线任务状态码（来自 LitePan mapOfflineTaskUpdate）：
+          0 = 等待处理, 1 = 离线下载中, 2 = 已完成,
+          3 = 失败, 4 = 重试中, 5 = 失败
+
+        超时时返回 (当前状态, "等待超时")；失败时返回对应失败码和错误信息。
+        """
+        task_id = (task_id or "").strip()
+        if not task_id:
+            return STATUS_FAILED, "缺少 taskId"
+        deadline = time.time() + timeout
+        last_msg = ""
+        while time.time() < deadline:
+            try:
+                tasks = self.list_tasks()
+                for t in tasks:
+                    if t.task_id != task_id:
+                        continue
+                    if t.status == STATUS_SUCCESS:
+                        return STATUS_SUCCESS, "已完成"
+                    if t.status in (STATUS_FAILED, STATUS_FAILED_ALT):
+                        return t.status, t.message or "离线下载失败"
+                    last_msg = t.message or STATUS_TEXT.get(t.status, "")
+                # 任务不在列表中（可能被清理），视为进行中
+                time.sleep(poll_interval)
+            except GuangyaError as exc:
+                log.warning("轮询离线任务状态失败 %s: %s", task_id, exc)
+                time.sleep(poll_interval)
+        return -1, f"等待超时（{timeout}s），当前状态: {last_msg or '未知'}"
 
     def delete_file(self, parent_id: str, file_id: str) -> None:
         """删除网盘里的文件/目录（用于洗版时替换旧版本）。
