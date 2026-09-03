@@ -82,13 +82,19 @@ class ChannelMessage:
 class WebScraper:
     """轮询公开频道的网页预览页。"""
 
-    def __init__(self, channels: list[str], interval: int = 120, timeout: int = 20) -> None:
+    def __init__(self, channels: list[str], interval: int = 120, timeout: int = 20, proxy: str = "") -> None:
         # 允许传入 @name / name / https://t.me/name 三种写法
         self.channels = [self._normalize(c) for c in channels if c]
         self.interval = max(30, int(interval))
         self.timeout = timeout
+        self.proxy = proxy or None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9"})
+        if self.proxy:
+            self._session.proxies.update({
+                "http": self.proxy,
+                "https": self.proxy,
+            })
 
     @staticmethod
     def _normalize(channel: str) -> str:
@@ -109,8 +115,14 @@ class WebScraper:
     def _parse_html(self, channel: str, html: str) -> list[ChannelMessage]:
         """把频道 HTML 解析成消息列表（与网络解耦，便于测试与复用）。"""
         messages: list[ChannelMessage] = []
-        # 用 data-post 定位每条消息，再就近取正文
-        for chunk in re.split(r'(?=<div[^>]+class="tgme_widget_message(?!_)")', html):
+        # 找到所有外层消息 div：class="tgme_widget_message ..." 但不含 _text/_left_part 等子类
+        # 注意：不能用 re.split，因为原 pattern 末尾的 " 导致永远匹配不上（class 值后跟 Wrap 而非引号）
+        OUTER_DIV_RE = re.compile(r'<div\b[^>]*\bclass="tgme_widget_message(?!_)[^"]*"[^>]*>')
+        outer_matches = list(OUTER_DIV_RE.finditer(html))
+        for i, m in enumerate(outer_matches):
+            start = m.start()
+            end = outer_matches[i + 1].start() if i + 1 < len(outer_matches) else len(html)
+            chunk = html[start:end]
             id_match = MSG_ID_RE.search(chunk)
             if not id_match:
                 continue
