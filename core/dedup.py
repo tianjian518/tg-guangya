@@ -292,6 +292,12 @@ class CloudDedup:
         """综合本地记录与云端核查，给出去重决策。
 
         store 需提供 get(hash_) -> 记录对象或 None，记录含 status 字段。
+
+        关键修正：同一磁力（btih）只要本地记过 done/submitted，就视为已处理、直接跳过，
+        绝不再转。云端复查仅作为「是否洗版替换」的辅助——其「查不到」**不得**触发重新转存。
+        原因：光鸭里文件的名字来自种子发布名（常是小写英文/拼音，如
+        HeiYeGaoBai.2026.2160p.WEB-DL.mp4），与电报标题（《黑夜告白》...）对不上时，
+        names_match 会误判「云端没有」，导致已存在的片子被反复复制（尤其停监控再开时）。
         """
         cat = self.classifier.classify(title).category if self.organize_enabled else ""
         rec = None
@@ -301,16 +307,23 @@ class CloudDedup:
             rec = None
         local_done = rec is not None and (rec.status in ("done", "submitted"))
 
+        # 同一磁力已转存过 → 直接跳过，不再转（云端复查只用于「洗版替换」判定）
         if rec and local_done:
-            # 第 2 步：本地说转过 → 复查云端
-            existing = self._find_existing(cat, title)
+            existing = None
+            if self.cloud_check_new:
+                try:
+                    existing = self._find_existing(cat, title)
+                except Exception:
+                    existing = None
             if existing:
                 return self._decide_upgrade(existing, cat, title,
                                             "本地已转存且云端仍存在")
-            return DedupDecision("retransfer",
-                                "本地已转存但云端已无（用户删除过），重新转存", cat, "")
+            return DedupDecision(
+                "skip_exists",
+                "本地已转存（云端复查未确认存在，按已处理跳过，防重复）",
+                cat, "")
 
-        # 本地无记录（新磁力）
+        # 本地无记录（新磁力）：尽力做云端复查，命中同名则跳过/洗版
         if self.cloud_check_new:
             existing = self._find_existing(cat, title)
             if existing:
