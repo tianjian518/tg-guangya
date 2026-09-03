@@ -1,14 +1,17 @@
 # TG → 光鸭 自动转存：一键部署
 #
-# 启动：   docker compose up -d
+# 重要：本配置直接使用已构建好的镜像（tianjian518/tg-guangya），不再本地构建。
+# 所以「拉最新」= docker compose pull && docker compose up -d，镜像里就是最新代码。
+# （之前用 build: . 时，docker pull 下来的镜像根本没被用到，导致一直跑旧代码。）
+#
+# 升级：   docker compose pull && docker compose up -d
 # 停止：   docker compose down
-# 升级：   docker compose down && docker compose up -d --build
 # 数据：   宿主机的 ./data 目录挂载到容器 /data，配置/数据库/会话都在里面，容器删了也不丢。
 #
 # 访问：   http://localhost:8000  （首次进入「系统设置 → 光鸭账号」扫码登录）
 services:
   tg-guangya:
-    build: .
+    image: tianjian518/tg-guangya:latest
     container_name: tg-guangya
     ports:
       - "8000:8000"
@@ -18,4 +21,8 @@ services:
       - DATA_DIR=/data
       - HOST=0.0.0.0
       - PORT=8000
+    # 飞牛/FNOS 容器常因默认 DNS 解析不到外网域名而登录失败，显式指定公共 DNS 兜底
+    dns:
+      - 8.8.8.8
+      - 119.29.29.29
     restart: unless-stopped

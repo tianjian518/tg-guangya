@@ -515,6 +515,34 @@ def logout():
     return {"ok": True}
 
 
+@app.post("/api/guangya/login/manual")
+def login_manual(body: dict):
+    """手动填入光鸭令牌（access_token / refresh_token）直接登录。
+
+    用途：当扫码/设备码流程不便使用时，可把在 LitePan 等工具里已经拿到的
+    光鸭令牌直接粘进来，跳过扫码。令牌会写入 config.yaml 并立即生效。
+    """
+    access = str(body.get("access_token") or "").strip()
+    refresh = str(body.get("refresh_token") or "").strip()
+    if not access:
+        raise HTTPException(status_code=400, detail="access_token 不能为空")
+    tmp = GuangyaClient(
+        access_token=access, refresh_token=refresh,
+        client_id=cfg.guangya.client_id, device_id=cfg.guangya.device_id,
+    )
+    try:
+        info = tmp.me()
+    except GuangyaError as exc:
+        raise HTTPException(status_code=401, detail=f"令牌校验失败：{exc}")
+    # 校验通过，写入配置
+    cfg.guangya.access_token = access
+    cfg.guangya.refresh_token = refresh
+    cfg.save_token(access, refresh, str(CONFIG_PATH))
+    global client
+    client = tmp
+    return {"ok": True, "account": info}
+
+
 @app.get("/api/guangya/account")
 def account():
     c = _client_safe()
