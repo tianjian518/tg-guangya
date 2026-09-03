@@ -162,7 +162,8 @@ def start_discovery(cfg: AppConfig, config_path: str, scraper: WebScraper | None
         return None
 
     disc = ChannelDiscovery(
-        seed_urls=d.seed_urls, seed_file=d.seed_file, interval_hours=d.interval_hours
+        seed_urls=d.seed_urls, seed_file=d.seed_file, interval_hours=d.interval_hours,
+        proxy=cfg.source.proxy,
     )
     disc.load_known(cfg.source.channels)
 
@@ -189,7 +190,7 @@ def run_web(cfg: AppConfig, scraper: WebScraper, handler) -> None:
             except Exception as exc:
                 log.warning("历史扫描 %s 出错: %s", ch, exc)
     log.info("开始轮询频道（间隔 %ds）...", cfg.source.poll_interval)
-    scraper.poll_forever(handler)
+    scraper.poll_forever(handler, max_consecutive_failures=3)
 
 
 def run_userbot(cfg: AppConfig, handler) -> None:
@@ -261,7 +262,7 @@ def main() -> None:
     # 来源对象（网页模式下，其频道列表会随自动发现实时更新）
     source_obj = None
     if cfg.source.type != "userbot":
-        source_obj = WebScraper(cfg.source.channels, interval=cfg.source.poll_interval)
+        source_obj = WebScraper(cfg.source.channels, interval=cfg.source.poll_interval, proxy=cfg.source.proxy)
 
     # 后台自动发现频道（web / userbot 模式通用，只往配置里加）
     disc = start_discovery(cfg, args.config, scraper=source_obj)
