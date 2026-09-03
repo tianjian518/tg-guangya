@@ -41,26 +41,35 @@ UA = (
 
 
 class ChannelDiscovery:
+    MAX_CHANNELS = 50  # 自动发现上限，防止死频道撑爆轮询
     def __init__(
         self,
         seed_urls: Iterable[str] | None = None,
         seed_file: str = "",
         interval_hours: float = 24.0,
         timeout: int = 25,
+        proxy: str = "",
     ) -> None:
         self.seed_urls = [str(u).strip() for u in (seed_urls or []) if u]
         self.seed_file = seed_file
         self.interval = max(1.0, float(interval_hours)) * 3600
         self.timeout = timeout
+        self.proxy = proxy or None
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9"})
+        if self.proxy:
+            self._session.proxies.update({
+                "http": self.proxy,
+                "https": self.proxy,
+            })
         self.known: Set[str] = set()
         self._stop = threading.Event()
 
     def load_known(self, channels: Iterable[str]) -> None:
         self.known = {str(c).strip().lstrip("@").lower() for c in channels if c}
 
-    def load_seed_file(self) -> Set[str]:
+    def _load_seed_raw(self) -> Set[str]:
+        """返回种子文件里的原始名字集合（不受上限限制）。"""
         names: Set[str] = set()
         if not self.seed_file:
             return names
@@ -71,6 +80,9 @@ class ChannelDiscovery:
         except FileNotFoundError:
             log.warning("种子文件不存在: %s", self.seed_file)
         return names
+
+    def load_seed_file(self) -> Set[str]:
+        return self._load_seed_raw()
 
     @staticmethod
     def extract_names(text: str) -> Set[str]:
@@ -92,7 +104,16 @@ class ChannelDiscovery:
             except Exception as exc:
                 log.warning("发现源抓取失败 %s: %s", url, exc)
         found |= self.load_seed_file()
-        new = {n for n in found if n not in self.known}
+        # 保留种子文件里的频道（不受上限限制），只限制自动发现的
+        seed_names = {n for n in found if n in self._load_seed_raw()}
+        existing_known = self.known & found
+        auto_new = {n for n in found if n not in self.known and n not in seed_names}
+        # 按字母序排序，取上限内的自动发现频道
+        capped = sorted(auto_new)[:max(0, self.MAX_CHANNELS - len(existing_known))]
+        new = seed_names | existing_known | set(capped)
+        if len(capped) < len(auto_new):
+            log.info("自动发现已截断：发现 %d 个，上限 %d 个（保留种子频道 %d 个）",
+                     len(auto_new), self.MAX_CHANNELS, len(seed_names))
         return new
 
     def run(self, on_new: Callable[[Set[str]], None]) -> None:
