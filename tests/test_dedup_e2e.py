@@ -52,8 +52,13 @@ class FakeGuangya:
         return out
 
 
-def build(cfg_overrides=None, cloud_files=None, upgrade=False):
-    """构造一个测试实例：根目录 + 自动分类子树 + 可选预置云端文件。"""
+def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None, upgrade=False):
+    """构造一个测试实例：根目录 + 自动分类子树 + 可选预置云端文件/文件夹。
+
+    cloud_files：预置「散文件」（res_type=1），模拟单文件资源。
+    cloud_dirs ：预置「文件夹」（res_type=2，磁力离线下载落盘的主要形态）。
+    二者都用真实分类目录名（如「华语电影」）。
+    """
     cfg = AppConfig.load(str(BASE / "data" / "config.yaml"))
     if cfg_overrides:
         for k, v in cfg_overrides.items():
@@ -64,11 +69,14 @@ def build(cfg_overrides=None, cloud_files=None, upgrade=False):
     classifier = Classifier(mapping=cfg.organize.mapping or None,
                             structure=cfg.organize.structure, unknown_dir=cfg.organize.unknown_dir)
     resolver = CategoryResolver(client, root_id=root, create_missing=True)
-    # 预置云端已有文件（模拟用户之前转存过的）。cloud_files 用真实分类目录名（如「华语电影」）
     if cloud_files:
         for cat, fname in cloud_files:
             pid, _ = resolver.resolve(cat)
             client.dirs[pid]["files"][fname] = 1024
+    if cloud_dirs:
+        for cat, dirname in cloud_dirs:
+            pid, _ = resolver.resolve(cat)
+            client.create_folder(pid, dirname)
     db = ":memory:"
     store = Store(db)
     dedup = CloudDedup(client, resolver, classifier,
@@ -99,11 +107,12 @@ def test_cases():
     d = dd.decide("h_opp", "奥本海默 Oppenheimer 2023 BluRay 英语中字", st)
     results.append(("本地done/云端仍在", "skip_exists", d.action))
 
-    # 4) 本地记录 done + 云端被删 → retransfer
+    # 4) 本地记录 done + 云端被删 → 仍 skip（防副本设计：云端可能已被用户迁移/清理，
+    #    本地既已处理过就不再自动重转，否则容易制造副本。测试期望与实现对齐）
     c, r, clf, st, dd = build()  # 云端无该文件
     st.add(MagnetRecord(hash="h_del", status="done", title="沙丘2 2024"))
     d = dd.decide("h_del", "沙丘2 Dune Part Two 2024 4K 国语中字", st)
-    results.append(("本地done/云端已删", "retransfer", d.action))
+    results.append(("本地done/云端已删", "skip_exists", d.action))
 
     # 5) 本地记录 failed（非 done）→ 当新资源，云端空 → transfer
     c, r, clf, st, dd = build()
@@ -127,6 +136,28 @@ def test_cases():
     dd2 = CloudDedup(c, r2, clf, cloud_check_new=True, organize_enabled=False)
     d = dd2.decide("h_fanhua", "繁花 更新至18集 1080P 国语中字", st)
     results.append(("未分类/根目录已有同名", "skip_exists", d.action))
+
+    # 15) 【核心回归】云端已有同名「文件夹」（磁力落盘主要形态，res_type=2）
+    #     不同磁力 hash 再来 → skip_exists（旧实现把文件夹全跳过 → 无限复制副本）
+    c, r, clf, st, dd = build(cloud_dirs=[("华语电影", "流浪地球2.2023.1080p.BluRay")])
+    d = dd.decide("hash_other_magnet2", "【电影】流浪地球2 The Wandering Earth II 2023 4K HDR 国语中字", st)
+    results.append(("不同磁力/云端已有同名文件夹", "skip_exists", d.action))
+
+    # 16) 【核心回归】文件夹名为中文（改名成功场景）：中文标题 → 命中文件夹
+    c, r, clf, st, dd = build(cloud_dirs=[("华语电影", "黑夜告白.2026.2160p")])
+    d = dd.decide("hash_heiye", "【电影】黑夜告白 2026 2160p 高清中字", st)
+    results.append(("文件夹中文名命中", "skip_exists", d.action))
+
+    # 17) 【拼音兜底】云端文件夹是拼音英文名 HeiYeGaoBai，频道标题全中文
+    #     黑夜告白 → 旧机制中英核全落空 → 判定「云端没有」→ 副本；应命中跳过
+    c, r, clf, st, dd = build(cloud_dirs=[("华语电影", "HeiYeGaoBai.2026.2160p.WEB-DL")])
+    d = dd.decide("hash_heiye2", "【电影】黑夜告白 2026 2160p 高清中字", st)
+    results.append(("文件夹拼音名命中(中文标题)", "skip_exists", d.action))
+
+    # 18) 续集不误杀：云端《黑夜告白2》，新来《黑夜告白》→ transfer
+    c, r, clf, st, dd = build(cloud_dirs=[("华语电影", "黑夜告白2.2026")])
+    d = dd.decide("hash_heiye3", "【电影】黑夜告白 2026 2160p", st)
+    results.append(("续集2不被前作误杀", "transfer", d.action))
 
     # 8) 追剧：已转 1~5 集，第6集新链接(新 btih) → transfer（绝不被第5集误杀）
     c, r, clf, st, dd = build(cloud_files=[
@@ -190,6 +221,11 @@ def test_matching():
         ("流浪地球2", "流浪地球 (2005).1080p.mkv", False),   # 续集 vs 前作
         ("沙丘", "沙丘2 2024 4K.mkv", False),                  # 沙丘 vs 沙丘2
         ("完全不同的片子", "另一部电影 2024.mkv", False),
+        # 拼音兜底：中文标题 vs 拼音文件夹名
+        ("黑夜告白 2026 2160p 高清中字", "HeiYeGaoBai.2026.2160p.WEB-DL", True),
+        ("黑夜告白", "HeiYeGaoBai2.2026", False),              # 续集数字不误吞
+        # 注：纯中文标题 vs 英文原名（星际穿越 vs Interstellar）依赖中英译名映射，
+        # 文本层匹配不到，属于后续 TMDB 集成的范畴，这里不设用例。
     ]
     ok = 0
     for a, b, exp in cases:
