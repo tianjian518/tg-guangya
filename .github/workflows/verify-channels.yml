@@ -1,15 +1,16 @@
 name: Verify Magnet Channels
 
-# 一次性体检：在 GitHub runner（网络不受限）上挖掘并实测影视磁力频道。
-# 手动触发：Actions -> Verify Magnet Channels -> Run workflow
-# 结果打印到日志，同时上传 keep_channels.txt artifact。
+# 在 GitHub runner（网络不受限）上多页抓取 t.me/s/<频道>，实测影视磁力产出。
+# 触发：手动 Run workflow，或 push 改动 seeds/candidates_verify.txt。
+# 结果打印到日志。
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - "tools/crawl_and_verify.py"
       - "seeds/candidates_verify.txt"
+      - "tools/crawl_and_verify.py"
+      - "verify_channels.py"
 
 jobs:
   verify:
@@ -25,15 +26,15 @@ jobs:
       - name: Install deps
         run: pip install -q requests PyYAML
 
-      - name: Crawl and verify
+      - name: Verify channels (4 pages)
         id: verify
         run: |
-          python3 tools/crawl_and_verify.py 2>&1 | tee /tmp/verify_full.txt
+          CHS=$(grep -v '^#' seeds/candidates_verify.txt | grep -v '^$' | tr '\n' ' ')
+          echo "候选: $CHS"
+          python3 verify_channels.py --channels $CHS --pages 4 --delay 0.4 --keep 2>&1 | tee /tmp/verify_full.txt
 
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: verify-result
-          path: |
-            /tmp/verify_full.txt
-            /tmp/keep_channels.txt
+          path: /tmp/verify_full.txt
