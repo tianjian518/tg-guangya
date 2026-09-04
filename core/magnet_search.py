@@ -41,6 +41,109 @@ MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get"
 _TRANS_LOCK = threading.Lock()
 _TRANS_CACHE: dict = {}
 
+# 中文片名 → 英文原名。**本地词典优先于 MyMemory**，因为免费翻译 API 对片名
+# 返回的是「模糊历史匹配」而非真翻译，实测噪声极大，会直接变成错误搜索词：
+#   流浪地球 → "g id Italic The Wandering Earth g Director Guo Fan"
+#   星际穿越 → "Gold Interstellar"      你好李焕英 → "Hello Lee Hwan young"
+# 这些结果喂给只吃英文的搜索引擎，表现就是「搜不出来 / 搜到的完全是别的片子」。
+_CN_TO_EN = {
+    # 华语
+    "流浪地球": "The Wandering Earth", "流浪地球2": "The Wandering Earth II",
+    "流浪地球3": "The Wandering Earth III",
+    "让子弹飞": "Let the Bullets Fly", "你好李焕英": "Hi Mom",
+    "长津湖": "The Battle at Lake Changjin", "战狼2": "Wolf Warrior 2",
+    "红海行动": "Operation Red Sea", "哪吒之魔童降世": "Ne Zha",
+    "我不是药神": "Dying to Survive", "卧虎藏龙": "Crouching Tiger Hidden Dragon",
+    "霸王别姬": "Farewell My Concubine", "活着": "To Live",
+    "大话西游": "A Chinese Odyssey", "功夫": "Kung Fu Hustle",
+    "无间道": "Infernal Affairs", "重庆森林": "Chungking Express",
+    "花样年华": "In the Mood for Love", "疯狂的石头": "Crazy Stone",
+    "唐人街探案": "Detective Chinatown", "隐秘的角落": "The Bad Kids",
+    "漫长的季节": "The Long Season", "狂飙": "The Knockout",
+    "繁花": "Blossoms Shanghai", "庆余年": "Joy of Life", "三体": "Three-Body",
+    "山海情": "Minning Town", "觉醒年代": "The Awakening Age",
+    "英雄": "Hero", "新龙门客栈": "New Dragon Gate Inn",
+    "甜蜜蜜": "Comrades Almost a Love Story", "春光乍泄": "Happy Together",
+    "甲方乙方": "The Dream Factory", "手机": "Cell Phone",
+    "集结号": "Assembly", "金陵十三钗": "The Flowers of War",
+    "芳华": "Youth", "西红柿首富": "Hello Mr Billionaire",
+    # 外语片常见译名
+    "星际穿越": "Interstellar", "盗梦空间": "Inception", "蝙蝠侠": "Batman",
+    "沙丘": "Dune", "沙丘2": "Dune Part Two", "奥本海默": "Oppenheimer",
+    "泰坦尼克号": "Titanic", "阿凡达": "Avatar", "复仇者联盟": "The Avengers",
+    "钢铁侠": "Iron Man", "蜘蛛侠": "Spider-Man", "超人": "Superman",
+    "黑客帝国": "The Matrix", "终结者": "The Terminator", "异形": "Alien",
+    "回到未来": "Back to the Future", "侏罗纪公园": "Jurassic Park",
+    "权力的游戏": "Game of Thrones", "绝命毒师": "Breaking Bad",
+    "黑镜": "Black Mirror", "怪奇物语": "Stranger Things",
+    "西部世界": "Westworld", "生活大爆炸": "The Big Bang Theory",
+    "老友记": "Friends", "行尸走肉": "The Walking Dead",
+    "进击的巨人": "Attack on Titan", "鬼灭之刃": "Demon Slayer",
+    "千与千寻": "Spirited Away", "龙猫": "My Neighbor Totoro",
+    "天空之城": "Castle in the Sky", "你的名字": "Your Name",
+    "寄生虫": "Parasite", "釜山行": "Train to Busan", "鱿鱼游戏": "Squid Game",
+    "请回答1988": "Reply 1988", "来自星星的你": "My Love from the Star",
+    "疯狂动物城": "Zootopia", "冰雪奇缘": "Frozen", "狮子王": "The Lion King",
+    "飞屋环游记": "Up", "机器人总动员": "WALL-E", "寻梦环游记": "Coco",
+    "心灵奇旅": "Soul", "头号玩家": "Ready Player One",
+    "银翼杀手": "Blade Runner", "教父": "The Godfather",
+    "肖申克的救赎": "The Shawshank Redemption", "阿甘正传": "Forrest Gump",
+    "这个杀手不太冷": "Leon", "楚门的世界": "The Truman Show",
+    "美丽人生": "Life Is Beautiful", "海上钢琴师": "The Legend of 1900",
+    "搏击俱乐部": "Fight Club", "低俗小说": "Pulp Fiction",
+    "沉默的羔羊": "The Silence of the Lambs", "七宗罪": "Se7en",
+    "记忆碎片": "Memento", "致命魔术": "The Prestige",
+    "黑暗骑士": "The Dark Knight", "信条": "Tenet", "敦刻尔克": "Dunkirk",
+    "星际迷航": "Star Trek", "星球大战": "Star Wars",
+    "加勒比海盗": "Pirates of the Caribbean", "速度与激情": "Fast and Furious",
+    "碟中谍": "Mission Impossible", "夺宝奇兵": "Indiana Jones",
+    "指环王": "The Lord of the Rings", "魔戒": "The Lord of the Rings",
+    "霍比特人": "The Hobbit", "哈利波特": "Harry Potter",
+    "疯狂的麦克斯": "Mad Max", "疯狂的麦克斯4": "Mad Max Fury Road",
+    "壮志凌云": "Top Gun", "壮志凌云2": "Top Gun Maverick",
+    "第一次的亲密接触": "The First Intimate Contact",
+    # 日韩
+    "东京物语": "Tokyo Story", "七武士": "Seven Samurai",
+    "罗生门": "Rashomon", "情书": "Love Letter",
+    "白色巨塔": "The Hospital", "蓝色生死恋": "Autumn in My Heart",
+}
+
+# MyMemory 返回的常夹带 HTML 标签残留与演职员表。遇到元信息词就截断，
+# 再剔除格式噪声词，最后限制词数——避免把噪声当成片名的一部分去搜。
+_META_CUT = re.compile(
+    r"\b(director|directed|starring|star|cast|produced|producer|"
+    r"writer|written|featuring|screenplay|based|novel)\b", re.I)
+_NOISE_TOKENS = {
+    "g", "id", "italic", "bold", "span", "div", "br", "html", "nbsp", "amp",
+    "class", "style", "href", "src", "width", "height", "font", "color",
+    "director", "directed", "starring", "cast", "produced", "writer", "written",
+    "movie", "film",
+    # 冠词（the/a/an）**不能**当噪声去掉——The Matrix / The Godfather 的
+    # The 是片名的一部分，去掉反而搜不到。
+}
+
+
+def _clean_translation(text: str, max_words: int = 6) -> str:
+    """把翻译结果清洗成「像片名」的词串。"""
+    if not text:
+        return ""
+    m = _META_CUT.search(text)
+    if m:
+        text = text[:m.start()]
+    words: list[str] = []
+    for w in re.split(r"[^a-zA-Z0-9]+", text):
+        if not w:
+            continue
+        # 单个字母（HTML 残留 g / b / i）一律丢弃；数字（如 2 / 007）保留
+        if len(w) == 1 and not w.isdigit():
+            continue
+        if w.lower() in _NOISE_TOKENS:
+            continue
+        words.append(w)
+        if len(words) >= max_words:
+            break
+    return " ".join(words)
+
 
 @dataclass
 class SearchHit:
@@ -127,6 +230,10 @@ def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
     kw = (keyword or "").strip()
     if not kw:
         return kw
+    # ① 本地词典优先：网络翻译对片名极不可靠，能查到就不走网络
+    local = _CN_TO_EN.get(kw)
+    if local:
+        return local
     with _TRANS_LOCK:
         cached = _TRANS_CACHE.get(kw)
     if cached is not None:
@@ -155,7 +262,8 @@ def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
         out = best or resp.get("responseData", {}).get("translatedText") or ""
     except Exception as exc:  # noqa: BLE001 - 翻译失败不影响主流程
         log.warning("中文关键词翻译失败（按原词搜索）: %s", exc)
-    clean = " ".join(re.sub(r"[^a-zA-Z0-9 ]+", " ", out).split())
+    # ② 网络翻译兜底：必须清洗，否则 HTML 残留 / 演职员表会混进搜索词
+    clean = _clean_translation(out)
     final = clean or kw
     with _TRANS_LOCK:
         _TRANS_CACHE[kw] = final
