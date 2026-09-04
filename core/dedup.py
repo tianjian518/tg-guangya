@@ -1,17 +1,23 @@
-"""三级去重：同磁力 → 内容账本 → 云端复查。
+"""去重决策：接到链接 → 规范命名 → 对比云盘 → 已存放弃 / 没存落盘。
 
-思路（v1.3.0 起重构，核心变化是「不再靠猜文本，先建账本」）：
-  转存成功的同时，按 core/ident.py 的身份识别把「这部片/这集」记进本地 titles 账本。
-  下次无论哪个频道、哪种写法、换没换磁力 hash，只要内容是同一份，账本先命中 → 不重复落盘。
+判定真源是【云盘】，不是本地记录：
+  1. 同一磁力 hash 已在本机处理过（magnets 表）→ 防刷屏兜底：
+       - 云端能找到对应内容 → 跳过；
+       - 云端找不到（本地显示 done、但盘里已没有 → 可能被手动删/清理）→ 重新落盘 retransfer；
+       - 任务还在进行中（submitted/upgraded）→ 跳过，等后台任务跑完，避免重复提交。
+  2. 已按集收录过的剧再来「全集包」→ 跳过（多为重复整包）。
+  3. 云端复查（真正的“已存就放弃”依据，用 core/ident.py 的规范 folder 名精确比对，
+     老命名用 names_match 模糊兜底）：
+       - 命中 → 已存：跳过；开了洗版且新版本质量更优 → 删除旧版替换；
+       - 未命中 → 云盘没有 → 落盘 transfer。
 
-决策流程：
-  1. 同磁力 hash 已处理（本地 magnets 表）      → 跳过（最便宜，刷屏防重）
-  2. 内容账本命中（titles 表，同一 folder key）→ 跳过（同片不同 hash / 不同写法重复推送）
-  3. 云端复查（防「不是本程序转的」历史资源）：
-       - 先精确：目录里存在同名 folder（我们自己落盘的标准名）→ 跳过/洗版
-       - 再模糊：names_match 兜底识别 MoviePilot/老版本等历史遗留命名
-  追剧/追番的保证：集数签名（SxxExx）进 folder key → 第6集永远不会被第5集顶掉；
-  同一集被不同磁力重复发布 → 账本同 key 直接命中丢弃。
+规范命名的保证：
+- 落盘 folder 名 = ident 的确定性 folder（电影/整包=片名.年份，单集/季=片名.SxxExx/.Sxx）。
+- 集数签名进 folder → 第6集永远不会被第5集顶掉；同一集被不同磁力重复发布 →
+  云盘里那个 S01E06 folder 在 → 直接跳过。
+- 本地 titles 账本不再当「永久跳过黑名单」，只做两件事：
+  洗版时提供旧版本的真实质量分（新规范 folder 名不含分辨率，不能从名字估）；
+  以及记录历史（防「云端整包目录不带集号 → 误杀后续新集」时仍能区分）。
 
 云端复查注意事项（老坑）：
 - 目录列表带缓存，条目含文件与文件夹（文件夹是磁力落盘主要形态，早期只比文件导致
@@ -331,12 +337,16 @@ class CloudDedup:
         if self.resolver.root_id and self.resolver.root_id not in parents:
             parents.append(self.resolver.root_id)  # 根目录兜底，防平铺资源漏判
 
-        # ① 精确：云端名字 == 我们这次的标准 folder（同内容不同源也应同名）
-        for parent_id in parents:
-            for e in self._list_dir_entries(parent_id):
-                name = e.get("name") or ""
-                if name and _entry_norm(name) == info.key:
-                    return e
+        # ① 精确：云端名字 == 我们这次的标准 folder（同内容不同源也应同名）。
+        #    两侧都归一化：info.key 形如「庆余年.S01E06 / 流浪地球2.2023」，
+        #    云端 folder 名与其规范名一致 → 归一化后相等，才算“已存”。
+        norm_key = _entry_norm(info.key or "")
+        if norm_key:
+            for parent_id in parents:
+                for e in self._list_dir_entries(parent_id):
+                    name = e.get("name") or ""
+                    if name and _entry_norm(name) == norm_key:
+                        return e
 
         # ② 模糊兜底（历史遗留命名）。单集 vs 无集号目录的误杀风险
         #    已由 names_match 内部规则挡住：新资源带集号、对端目录不带集号 → 一律不判同集。
@@ -350,9 +360,10 @@ class CloudDedup:
         return None
 
     def decide(self, hash_: str, title: str, store) -> DedupDecision:
-        """综合本地记录 + 内容账本 + 云端复查，给出去重决策。
+        """综合本地记录 + 云端复查，给出去重决策。
 
-        store 需提供 get / title_exists / title_has_episodes。
+        判定真源 = 云盘：云盘里已有同内容 → 放弃；没有 → 落盘。
+        store 需提供 get / title_has_episodes / title_get。
         """
         cat = ""
         try:
@@ -368,51 +379,30 @@ class CloudDedup:
             rec = None
         local_done = rec is not None and (rec.status in ("done", "submitted", "upgraded"))
 
-        # ① 同一磁力已处理过 → 直接跳过（云端仅用于洗版判定）
+        # ① 同一磁力已处理过 → 防刷屏兜底（真正的“是否已存”仍以云盘为准）
         if local_done:
-            if self.cloud_check_new and self.upgrade:
+            if self.cloud_check_new:
                 try:
                     existing = self._find_existing(cat, info)
                 except Exception:  # noqa: BLE001
                     existing = None
                 if existing:
-                    return self._decide_upgrade(existing, cat, title,
-                                                "本地已转存且云端仍存在")
+                    return self._decide_upgrade(existing, cat, title, store, info,
+                                                "本地已转存过该磁力，云盘里也有")
+                # 云盘里没有：本地显示 done 说明曾落盘成功 → 盘里那份被删/移走了，
+                # 按“云盘为准”重新落盘；若任务还在跑则继续等，不重复提交。
+                if rec.status == "done":
+                    return DedupDecision(
+                        "retransfer",
+                        "本地曾完成转存但云盘已无该内容，重新落盘", cat, "")
+                return DedupDecision(
+                    "skip_exists",
+                    "该磁力任务仍在进行中，跳过（防重复提交）", cat, "")
             return DedupDecision(
                 "skip_exists",
-                "本地已转存过该磁力，跳过（防重复）", cat, "")
+                "本地已处理过该磁力（关闭云端复查），跳过", cat, "")
 
-        # ② 内容账本命中：同内容曾成功落盘（可能是不同磁力/不同写法）
-        ledger = None
-        try:
-            if bool(info.key) and hasattr(store, "title_get"):
-                ledger = store.title_get(info.key)
-        except Exception:  # noqa: BLE001
-            ledger = None
-        if ledger is not None:
-            if self.upgrade:
-                new_q = quality_score(title)
-                old_q = int(getattr(ledger, "quality", 0) or 0)
-                # 新版本质量更高才洗版：替换云端旧 folder（账本记得旧版本的真实质量，
-                # 新规范命名的文件夹名不含分辨率，不能拿文件夹名估旧质量）
-                if new_q > old_q:
-                    try:
-                        existing = self._find_existing(cat, info)
-                    except Exception:  # noqa: BLE001
-                        existing = None
-                    if existing:
-                        return DedupDecision(
-                            "upgrade",
-                            f"账本有旧版本（质量 {old_q}），新版本更优（{new_q}），洗版替换",
-                            cat, "",
-                            replace_file_id=existing.get("file_id", ""),
-                            replace_parent_id=existing.get("parent_id", ""),
-                        )
-            return DedupDecision(
-                "skip_exists",
-                "账本已记录该内容（曾成功落盘），跳过", cat, "")
-
-        # ②b 整包 vs 已按集收录：先逐集追过的剧，再来「全集包」多为重复 → 跳过
+        # ② 已按集收录过的剧，再来「全集包」→ 多为重复整包 → 跳过
         if info.is_pack and not info.sig:
             try:
                 has_ep = store.title_has_episodes(norm_name(info.core)) \
@@ -424,30 +414,50 @@ class CloudDedup:
                     "skip_exists",
                     "该剧已按集收录过，整集包多为重复，跳过（如含新增集可手动转存）", cat, "")
 
-        # ③ 云端复查（首见内容，防本程序之外的历史资源）
+        # ③ 云端复查 = “对比云盘里是否已存”（核心判定）
+        #    先精确 folder 名（我们自己规范命名的标准名），再 names_match 模糊兜底
+        #    （MoviePilot / 老版本等历史遗留命名）。
         if self.cloud_check_new:
             try:
                 existing = self._find_existing(cat, info)
             except Exception:  # noqa: BLE001
                 existing = None
             if existing:
-                if self.upgrade:
-                    return self._decide_upgrade(existing, cat, title,
-                                                "云端已存在同名资源")
-                return DedupDecision("skip_exists", "云端已有同名资源，跳过", cat, "")
-        return DedupDecision("transfer", "新资源，转存", cat, "")
+                return self._decide_upgrade(existing, cat, title, store, info,
+                                            "云端已存在同名资源")
+        return DedupDecision("transfer", "云盘没有该内容，落盘", cat, "")
 
-    def _decide_upgrade(self, existing: dict, cat: str, title: str, base_reason: str) -> DedupDecision:
-        """云端已有同名同集文件时的决策：洗版（新更好则替换）或丢弃。"""
-        if self.upgrade:
-            new_q = quality_score(title)
+    def _decide_upgrade(self, existing: dict, cat: str, title: str,
+                        store, info, base_reason: str) -> DedupDecision:
+        """云端已存在同内容时的决策：已存 → 放弃（默认）；开洗版且新版本更优 → 替换。
+
+        旧版本质量优先取账本记录（落盘时标题的质量分）——新规范命名的 folder 名不含
+        分辨率，不能拿 folder 名估；没有账本记录（不是本程序转的）才从资源名估。
+        """
+        if not self.upgrade:
+            return DedupDecision("skip_exists", f"{base_reason}，跳过", cat, "")
+        ledger = None
+        try:
+            if bool(info.key) and hasattr(store, "title_get"):
+                ledger = store.title_get(info.key)
+        except Exception:  # noqa: BLE001
+            ledger = None
+        if ledger is not None:
+            old_q = int(getattr(ledger, "quality", 0) or 0)
+        else:
             old_q = quality_score(existing.get("name", ""))
-            if new_q > old_q:
-                return DedupDecision(
-                    "upgrade",
-                    f"{base_reason}；新版本质量更优（{new_q} > {old_q}），洗版替换旧版本",
-                    cat, "",
-                    replace_file_id=existing.get("file_id", ""),
-                    replace_parent_id=existing.get("parent_id", ""),
-                )
-        return DedupDecision("skip_exists", f"{base_reason}，丢弃", cat, "")
+        new_q = quality_score(title)
+        if new_q <= old_q:
+            return DedupDecision("skip_exists", f"{base_reason}，新版本质量不更优，跳过",
+                                 cat, "")
+        # 旧版本质量信息完全不可知（非本程序转的、folder 名又不带分辨率）→ 保守不删
+        if old_q == 0 and ledger is None:
+            return DedupDecision("skip_exists",
+                                 f"{base_reason}，旧版本质量未知，不轻易替换", cat, "")
+        return DedupDecision(
+            "upgrade",
+            f"{base_reason}；新版本质量更优（{new_q} > {old_q}），洗版替换旧版本",
+            cat, "",
+            replace_file_id=existing.get("file_id", ""),
+            replace_parent_id=existing.get("parent_id", ""),
+        )
