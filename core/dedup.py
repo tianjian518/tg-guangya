@@ -8,8 +8,13 @@
   2. 已按集收录过的剧再来「全集包」→ 跳过（多为重复整包）。
   3. 云端复查（真正的“已存就放弃”依据，用 core/ident.py 的规范 folder 名精确比对，
      老命名用 names_match 模糊兜底）：
-       - 命中 → 已存：跳过；开了洗版且新版本质量更优 → 删除旧版替换；
-       - 未命中 → 云盘没有 → 落盘 transfer。
+        - 命中 → 已存：跳过；开了洗版且新版本质量更优 → 删除旧版替换；
+        - 未命中 → 云盘没有 → 落盘 transfer。
+   4. 落盘准入（中文规范 + 归类，做不到就放弃 reject）：
+        - 标题必须剥得出中文片名（core 含中文），否则无法中文规范命名 → 放弃；
+        - 必须能整理进明确的中文分类目录（不进「未分类/其他」这类兜底桶），
+          且自动整理必须开启，否则 → 放弃。
+     开关：dedup.require_cn（默认开）。
 
 规范命名的保证：
 - 落盘 folder 名 = ident 的确定性 folder（电影/整包=片名.年份，单集/季=片名.SxxExx/.Sxx）。
@@ -44,6 +49,7 @@ except Exception:  # noqa: BLE001 - 可选依赖缺失时优雅降级
     _HAS_PINYIN = False
 
 from core.ident import analyze, norm as norm_name  # noqa: E402
+from core.classifier import KIND_OTHER  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -267,7 +273,7 @@ from dataclasses import dataclass  # noqa: E402
 
 @dataclass
 class DedupDecision:
-    action: str          # transfer / skip_exists / retransfer / upgrade
+    action: str          # transfer / skip_exists / retransfer / upgrade / reject
     reason: str
     category: str
     parent_id: str = ""
@@ -287,12 +293,36 @@ def _entry_norm(name: str) -> str:
     return "".join(_ALNUM.findall(_entry_base(name).lower()))
 
 
+# 落盘准入检查：必须「中文规范命名 + 整理归类」都做到，否则放弃链接。
+# 用户媒体库是中文体系：盘里要的是能认的中文片名、放进明确的中文分类目录；
+# 标题剥不出中文片名（纯英文/纯拼音/乱码），或只能归进「未分类/其他」这类
+# 兜底桶（=没整理成功），一律不落盘 —— 宁缺毋滥，做不到就放弃这个链接。
+def _standard_block_reason(info, cr, cat: str, organize_enabled: bool,
+                           require_cn: bool, unknown_dir: str) -> str:
+    """返回放弃理由（空串 = 可以通过，允许落盘）。"""
+    if not require_cn:
+        return ""
+    if not organize_enabled or cr is None:
+        return "自动整理归类未开启（组织分类被关闭）"
+    # ① 中文规范命名：片名主体必须含中文（core 是全中文时 ident 已剥掉英文，
+    #    如 奥本海默；纯英文/纯拼音标题做不成中文片名）
+    if not re.search(_CJK, info.core or ""):
+        return "标题无法规范成中文片名（缺中文片名），放弃链接"
+    # ② 整理归类：分类必须是明确的中文内容目录
+    if not cr.category:
+        return "无法整理归类（分类结果为空），放弃链接"
+    if cr.kind == KIND_OTHER or (cr.category or "") == (unknown_dir or "未分类"):
+        return f"只能归入兜底类「{cr.category}」，不算整理成功，放弃链接"
+    return ""
+
+
 class CloudDedup:
     """三级去重决策器（hash → 账本 → 云端）。"""
 
     def __init__(self, client, resolver, classifier,
                  cloud_check_new: bool = True, cache_ttl: float = 300.0,
-                 organize_enabled: bool = True, upgrade: bool = False) -> None:
+                 organize_enabled: bool = True, upgrade: bool = False,
+                 require_cn: bool = True) -> None:
         self.client = client
         self.resolver = resolver
         self.classifier = classifier
@@ -300,6 +330,7 @@ class CloudDedup:
         self.cache_ttl = cache_ttl
         self.organize_enabled = organize_enabled
         self.upgrade = upgrade
+        self.require_cn = require_cn
         self._lock = threading.Lock()
         # parent_id -> (timestamp, [条目列表])，条目含 file_id/name/size/res_type/parent_id
         self._dir_cache: dict = {}
@@ -362,14 +393,19 @@ class CloudDedup:
     def decide(self, hash_: str, title: str, store) -> DedupDecision:
         """综合本地记录 + 云端复查，给出去重决策。
 
-        判定真源 = 云盘：云盘里已有同内容 → 放弃；没有 → 落盘。
+        判定真源 = 云盘：云盘里已有同内容 → 放弃；没有 → 再查「中文规范准入」：
+        - 标题剥得出中文片名、且能整理进明确的中文分类目录 → 落盘 transfer；
+        - 做不到（无中文片名 / 只能进兜底类 / 整理被关闭）→ reject，放弃链接。
         store 需提供 get / title_has_episodes / title_get。
         """
+        cr = None
         cat = ""
-        try:
-            cat = self.classifier.classify(title).category if self.organize_enabled else ""
-        except Exception:  # noqa: BLE001
-            pass
+        if self.organize_enabled:
+            try:
+                cr = self.classifier.classify(title)
+                cat = cr.category
+            except Exception:  # noqa: BLE001
+                cr = None
         info = analyze(title)
 
         rec = None
@@ -378,6 +414,11 @@ class CloudDedup:
         except Exception:  # noqa: BLE001
             rec = None
         local_done = rec is not None and (rec.status in ("done", "submitted", "upgraded"))
+
+        def _standard_reason() -> str:
+            return _standard_block_reason(
+                info, cr, cat, self.organize_enabled, self.require_cn,
+                getattr(self.classifier, "unknown_dir", "未分类"))
 
         # ① 同一磁力已处理过 → 防刷屏兜底（真正的“是否已存”仍以云盘为准）
         if local_done:
@@ -390,8 +431,12 @@ class CloudDedup:
                     return self._decide_upgrade(existing, cat, title, store, info,
                                                 "本地已转存过该磁力，云盘里也有")
                 # 云盘里没有：本地显示 done 说明曾落盘成功 → 盘里那份被删/移走了，
-                # 按“云盘为准”重新落盘；若任务还在跑则继续等，不重复提交。
+                # 按“云盘为准”重新落盘（重新落盘同样是新写一份，也要过中文规范准入）；
+                # 若任务还在跑则继续等，不重复提交。
                 if rec.status == "done":
+                    blk = _standard_reason()
+                    if blk:
+                        return DedupDecision("reject", blk, cat or "", "")
                     return DedupDecision(
                         "retransfer",
                         "本地曾完成转存但云盘已无该内容，重新落盘", cat, "")
@@ -425,6 +470,11 @@ class CloudDedup:
             if existing:
                 return self._decide_upgrade(existing, cat, title, store, info,
                                             "云端已存在同名资源")
+
+        # ④ 落盘前准入：中文规范命名 + 整理归类，做不到就放弃这个链接
+        blk = _standard_reason()
+        if blk:
+            return DedupDecision("reject", blk, cat or "", "")
         return DedupDecision("transfer", "云盘没有该内容，落盘", cat, "")
 
     def _decide_upgrade(self, existing: dict, cat: str, title: str,
