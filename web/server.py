@@ -444,6 +444,14 @@ def get_settings():
             "api_hash": cfg.telegram.api_hash,
             "session": cfg.telegram.session,
         },
+        "bot": {
+            "enabled": cfg.bot.enabled,
+            "token": cfg.bot.token,
+            "admin_ids": list(cfg.bot.admin_ids),
+            "notify": cfg.bot.notify,
+            "proxy": cfg.bot.proxy,
+            "allow_anyone": cfg.bot.allow_anyone,
+        },
     }
 
 
