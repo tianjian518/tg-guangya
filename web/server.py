@@ -451,6 +451,8 @@ def get_settings():
             "notify": cfg.bot.notify,
             "proxy": cfg.bot.proxy,
             "allow_anyone": cfg.bot.allow_anyone,
+            "search_enabled": cfg.bot.search_enabled,
+            "search_engines": list(cfg.bot.search_engines),
         },
     }
 
