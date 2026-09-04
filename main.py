@@ -259,10 +259,13 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
         # 与 dedup 判准入时用同一套输入（原始标题 + 规范中文名），
         # 否则会出现「按欧美电影准入、却落到华语电影目录」的两处打架。
         try:
-            extra = analyze(text).folder
+            info = analyze(text)
+            extra = info.folder
+            region_hint = info.region_hint
         except Exception:  # noqa: BLE001 - 命名失败不影响分类，退回只用原标题
             extra = ""
-        cr = classifier.classify(text, extra=extra)
+            region_hint = ""
+        cr = classifier.classify(text, extra=extra, region_hint=region_hint)
         target, path = resolver.resolve(cr.category)
         log.info("分类: %s → %s（%s/%s，置信度 %.0f%%）",
                  text[:34], path or "根目录", cr.kind_name, cr.region_name,
