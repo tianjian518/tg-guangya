@@ -13,33 +13,55 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 REPO_BASE = Path(__file__).resolve().parent.parent  # tg-guangya/
 
 
+def _usable(p: Path) -> bool:
+    """目录存在且可写。宿主机上若碰巧有个不可写的 /data（本机就是），
+    必须识别出来并退回仓库目录，否则后面写文件会抛 PermissionError。"""
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    return os.access(str(p), os.W_OK)
+
+
 def get_data_dir() -> Path:
     env = os.environ.get("DATA_DIR")
     if env:
-        p = Path(env)
-    elif Path("/data").is_dir():
-        p = Path("/data")
-    elif (Path.cwd() / "config.yaml").exists():
-        p = Path.cwd()
+        candidates = [Path(env), REPO_BASE / "data"]
     else:
-        p = Path.cwd() / "data"
-    p.mkdir(parents=True, exist_ok=True)
-    return p
+        candidates = [
+            Path("/data") if Path("/data").is_dir() else None,
+            Path.cwd() if (Path.cwd() / "config.yaml").exists() else None,
+            Path.cwd() / "data",
+            REPO_BASE / "data",
+        ]
+    for c in candidates:
+        if c is not None and _usable(c):
+            return c
+    # 全都不可写时兜底：至少让程序能启动，不至于在 import 阶段就崩
+    return REPO_BASE / "data"
 
 
 def resolve_config_path(name: str = "config.yaml") -> Path:
-    """返回数据目录里的配置文件路径；不存在则先用仓库里的示例配置初始化。"""
+    """返回数据目录里的配置文件路径；不存在则先用仓库里的示例配置初始化。
+
+    初始化失败（目录只读）不算致命错误——照常返回路径，
+    由调用方在真正要写时再报错。这样 import main 也不会因为权限问题直接挂掉。
+    """
     d = get_data_dir()
     cfg = d / name
     if not cfg.exists():
         example = REPO_BASE / "config.example.yaml"
         if example.exists():
-            shutil.copyfile(example, cfg)
+            try:
+                shutil.copyfile(example, cfg)
+            except OSError as exc:  # 只读目录：忽略，交给调用方处理
+                print(f"[warn] 无法用示例配置初始化 {cfg}: {exc}", file=sys.stderr)
     return cfg
 
 
