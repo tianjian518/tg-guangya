@@ -19,3 +19,6 @@ telethon>=1.30
 # 可选：Telegram 机器人（bot.enabled=true 时才需要）
 # 用于手机上端命令控制（/status /pause /add 频道）与转存结果推送
 pyTelegramBotAPI>=4.14
+
+# 可选：中文→拼音（云端去重拼音兜底；不装则自动跳过该层匹配）
+pypinyin>=0.49
