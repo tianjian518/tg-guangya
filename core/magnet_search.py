@@ -138,7 +138,21 @@ def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
         r = requests.get(url, headers={"User-Agent": SEARCH_UA},
                          timeout=timeout)
         r.raise_for_status()
-        out = ((r.json() or {}).get("responseData") or {}).get("translatedText") or ""
+        resp = r.json() or {}
+        # 优先从 matches 数组里挑质量最高且含英文字母的条目，
+        # 而非直接取 responseData.translatedText（该字段常取到低质量匹配）
+        matches = resp.get("matches") or []
+        best = None
+        best_score = -1
+        for m in matches:
+            score = float(m.get("quality") or 0)
+            match_val = float(m.get("match") or 0)
+            combined = score * 1000 + match_val
+            text = (m.get("translation") or "").strip()
+            if text and any(c.isalpha() for c in text) and combined > best_score:
+                best_score = combined
+                best = text
+        out = best or resp.get("responseData", {}).get("translatedText") or ""
     except Exception as exc:  # noqa: BLE001 - 翻译失败不影响主流程
         log.warning("中文关键词翻译失败（按原词搜索）: %s", exc)
     clean = " ".join(re.sub(r"[^a-zA-Z0-9 ]+", " ", out).split())
