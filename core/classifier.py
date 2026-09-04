@@ -110,6 +110,15 @@ _MOVIE_RULES: list[tuple[re.Pattern, str, int]] = [
     (re.compile(r"电影|影片|院线|影院版|导演剪辑版|蓝光|bd\s*rip|1080p|2160p|4k\s*(hdr|uhd)?|hd\s*电影", re.I), KIND_MOVIE, 2),
 ]
 
+# 日本动漫特征词（番名 + 圈内术语）。动漫标题常不带语言标签，
+# 只靠中文占比会把日番判成国产动漫，故单独给一条日韩线索（权重 3）。
+_ANIME_JPKR = re.compile(
+    r"\bova\b|\boad\b|剧场版|新番|番剧|字幕组|喵萌|诸神|甜梦|动漫花园|巴哈姆特|"
+    r"海贼王|火影忍者|名侦探柯南|哆啦a梦|蜡笔小新|樱桃小丸子|精灵宝可梦|宝可梦|"
+    r"鬼灭之刃|咒术回战|进击的巨人|间谍过家家|葬送的芙莉莲|初音未来|索尼子",
+    re.I,
+)
+
 _REGION_RULES: list[tuple[re.Pattern, str, int]] = [
     # 港台：直接并入华语（不单独设类，港台影视统一归入华语目录）
     (re.compile(r"粤语|广东话|繁体|繁中|香港|台湾|hktv|tvb|港剧|台剧|cantonese|hong\s*kong|taiwan", re.I), REGION_CN, 4),
@@ -122,10 +131,32 @@ _REGION_RULES: list[tuple[re.Pattern, str, int]] = [
     (re.compile(r"国语|普通话|中文|国配|中字|简体|简中|chs|cht|大陆|内地|国产|华语|中国|央视", re.I), REGION_CN, 4),
     # 其他地区
     (re.compile(r"泰语|泰剧|印度|越南|泰国|新加坡|马来西亚|印尼|菲律宾|土耳其|伊朗|阿拉伯", re.I), REGION_OTHER, 3),
+    # 日本动漫特征词（番名/术语）。动漫标题常缺语言标签，靠它把日番从国产动漫里分出来。
+    (_ANIME_JPKR, REGION_JPKR, 3),
 ]
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _NOISE = re.compile(r"\s+")
+
+# 频道栏目前缀：【欧美电影】/【日韩剧】/ 欧美电影: xxx …
+# 词表与 core/ident.py 的 _LEADING_TAG 保持一致（两处必须同步改）。
+_LEADING_CATEGORY = re.compile(
+    r"^\s*[\[【(（]?\s*"
+    r"(?:最新|热门|经典|精品|推荐|高清|超清|蓝光|原盘|4k|8k|uhd|1080p|720p|2160p)?\s*"
+    r"(欧美电影|华语电影|国产电影|外语电影|亚洲电影|日本电影|韩国电影|港台电影|"
+    r"电影|剧集|动漫|动画|纪录片|综艺|演唱会|短片|连续剧|网剧|电视剧|"
+    r"美剧|韩剧|日剧|港剧|台剧|国产剧|欧美剧|日韩剧|港片|日影|韩影)"
+    r"\s*[\]】)）］]?\s*[:：|｜\-–—]?\s*",
+    re.I,
+)
+
+# 栏目前缀里的地区词 → 地区。这是「频道编辑的显式标注」，比语言推断可靠，
+# 但弱于真正的语言标签（粤语/日语/韩语…），所以权重只给 2。
+_PREFIX_REGION: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"日韩|日本|韩国", re.I), REGION_JPKR),
+    (re.compile(r"欧美|外语", re.I), REGION_WEST),
+    (re.compile(r"国产|华语|港台", re.I), REGION_CN),
+]
 
 
 def _cjk_ratio(text: str) -> float:
@@ -188,6 +219,21 @@ class Classifier:
 
     # ---------- 主入口 ----------
     def classify(self, title: str, extra: str = "") -> ClassifyResult:
+        """判定分类。
+
+        :param title: 原始频道标题（保留栏目前缀、语言标签、英文原名——
+                      这些是地区判定的真实信号，绝不能先剥掉）
+        :param extra: 补充文本，通常是 ident 产出的规范中文名 info.folder
+
+        地区判定优先级（高 → 低）：
+          1. 显式语言/地区标签：粤语/日语/韩语/英语/国语/美国/东京…（权重 4）
+          2. 频道栏目前缀里的地区词：日韩剧/欧美电影/国产剧…（权重 2）
+          3. 原标题语言推断：几乎无中文→欧美；中文为主→华语（权重 2）
+
+        ⚠️ 历史 bug：曾把「已翻译成中文的 folder」单独喂进来，靠它的中文占比
+        推断地区，结果所有外语片的中文译名都被判成华语（黑客帝国→华语电影、
+        盗梦空间→华语电影）。中文占比必须只看「原始标题」，不能看中文译名。
+        """
         text = f"{title or ''} {extra or ''}"[:600]
         if not text.strip():
             return self._unknown("空标题")
@@ -212,18 +258,26 @@ class Classifier:
                 kind, kind_score = KIND_MOVIE, 1
                 signals.append("兜底:无明确信号→按电影处理")
 
-        # 地区兜底：靠中文占比推断
+        # 地区兜底：显式语言标签没命中时，依次退到「栏目前缀」→「原标题语言」
         if not region or region_score == 0:
-            ratio = _cjk_ratio(text)
-            if ratio >= 0.25:
-                region, region_score = REGION_CN, 1
-                signals.append(f"兜底:中文占比{ratio:.0%}→华语")
-            elif ratio <= 0.05:
-                region, region_score = REGION_WEST, 1
-                signals.append(f"兜底:几乎无中文→欧美")
+            prefix = self._prefix_region(title)
+            if prefix:
+                region, region_score = prefix, 2
+                signals.append(f"栏目前缀→{REGION_NAMES.get(prefix, prefix)}")
             else:
-                region, region_score = REGION_OTHER, 1
-                signals.append(f"兜底:中英混排无法判定→其他")
+                # 中文占比只看原始标题（剥掉栏目前缀）。绝不能用 text——
+                # 它含已翻译成中文的 folder，会让所有外语片译名都判成华语。
+                base = _LEADING_CATEGORY.sub("", title or "").strip() or (title or "")
+                ratio = _cjk_ratio(base)
+                if ratio >= 0.25:
+                    region, region_score = REGION_CN, 2
+                    signals.append(f"兜底:原标题以中文为主({ratio:.0%})→华语")
+                elif ratio <= 0.05:
+                    region, region_score = REGION_WEST, 2
+                    signals.append(f"兜底:原标题几乎无中文({ratio:.0%})→欧美")
+                else:
+                    region, region_score = REGION_OTHER, 1
+                    signals.append(f"兜底:原标题中英混排({ratio:.0%})→其他")
 
         category = self._to_category(kind, region)
         # 置信度：两套打分归一化后取平均，上限 1
@@ -232,6 +286,21 @@ class Classifier:
                               confidence=confidence, signals=signals)
 
     # ---------- 内部 ----------
+    @staticmethod
+    def _prefix_region(title: str) -> str:
+        """从频道栏目前缀（【日韩剧】/【欧美电影】/ 欧美电影: …）里取地区。
+
+        频道编辑标注的栏目名是可信线索，但弱于真正的语言标签，取不到就返回空串。
+        """
+        m = _LEADING_CATEGORY.match(title or "")
+        if not m:
+            return ""
+        tag = m.group(1) or ""
+        for pat, region in _PREFIX_REGION:
+            if pat.search(tag):
+                return region
+        return ""
+
     def _score(self, rules, text: str) -> tuple[str, int, list[str]]:
         scores: dict[str, int] = {}
         signals: list[str] = []
