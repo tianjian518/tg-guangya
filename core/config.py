@@ -107,10 +107,14 @@ class DedupConfig:
     - upgrade: 洗版/版本升级。盘里已有同名同集文件时，若新链接质量更优（更高分辨率、
       REMUX、Atmos 等）则删除旧版本、转存新版本；否则照常跳过。默认关闭，需显式开启
       （删除为不可逆操作，避免误删）。
+    - require_cn: 落盘准入——标题必须能规范成中文片名（core 含中文）、且能整理进明确
+      的中文分类目录（不进「未分类/其他」兜底桶），做不到就放弃该链接，不落盘。
+      默认开启；关闭则退回宽松模式（允许中文外的命名/兜底归类）。
     """
     cloud_check_new: bool = True
     cache_ttl: float = 300.0
     upgrade: bool = False
+    require_cn: bool = True
 
 
 @dataclass
@@ -209,6 +213,7 @@ class AppConfig:
             cloud_check_new=bool(dd.get("cloud_check_new", True)),
             cache_ttl=float(dd.get("cache_ttl", 300.0)),
             upgrade=bool(dd.get("upgrade", False)),
+            require_cn=bool(dd.get("require_cn", True)),
         )
         tm = raw.get("tmdb") or {}
         cfg.tmdb = TmdbConfig(api_key=str(tm.get("api_key", "")).strip())
@@ -312,6 +317,7 @@ class AppConfig:
                 "cloud_check_new": self.dedup.cloud_check_new,
                 "cache_ttl": self.dedup.cache_ttl,
                 "upgrade": self.dedup.upgrade,
+                "require_cn": self.dedup.require_cn,
             },
             "storage_db": self.storage_db,
             "notify_console": self.notify_console,
@@ -380,6 +386,8 @@ class AppConfig:
             self.dedup.cache_ttl = max(30.0, float(dd["cache_ttl"]))
         if "upgrade" in dd:
             self.dedup.upgrade = bool(dd["upgrade"])
+        if "require_cn" in dd:
+            self.dedup.require_cn = bool(dd["require_cn"])
         if "storage_db" in s:
             self.storage_db = str(s["storage_db"]).strip()
         if "notify_console" in s:
