@@ -363,12 +363,16 @@ async function renderTab() {
         <input type="text" id="disc-seed" value="${esc(disc.seed_file)}" placeholder="如 seeds/channels_seed.txt" />
         <label>种子链接（一行一个，可选，用于从网络清单补充频道）</label>
         <textarea id="disc-urls" rows="3" placeholder="https://raw.githubusercontent.com/.../channels.md">${esc((disc.seed_urls || []).join("\n"))}</textarea>
+        <label>磁力验证阈值（新频道至少要有 N 条磁力才入库；0=跳过验证全入库）</label>
+        <input type="number" id="disc-vt" min="0" max="10" value="${esc(disc.verify_threshold ?? 1)}" />
+        <p class="hint">开启后，新发现频道会先扫 1 页 t.me/s/xxx，有磁力才追加进监控列表，避免把纯网盘分享/广告频道拉进来。</p>
         <button class="btn primary" id="disc-save" style="margin-top:12px">保存自动发现设置</button>`;
       $("#tab-body").appendChild(extra);
       $("#disc-save").addEventListener("click", async () => {
         state.settings.discovery = {
           enabled: $("#disc-on").checked,
           interval_hours: Number($("#disc-int").value) || 24,
+          verify_threshold: Math.max(0, Number($("#disc-vt").value) || 1),
           seed_file: $("#disc-seed").value.trim(),
           seed_urls: $("#disc-urls").value.split("\n").map((x) => x.trim()).filter(Boolean),
         };
@@ -509,7 +513,7 @@ async function renderTab() {
       <hr style="border:none;border-top:1px solid var(--bd);margin:14px 0" />
       <label style="font-weight:600">自动发现频道</label>
       <label><input type="checkbox" id="rt-disc" ${(S.discovery && S.discovery.enabled) ? "checked" : ""} style="width:auto"> 启用自动发现（从种子源自动扩充频道库）</label>
-      <p class="hint">⚠️ 自动发现会从聚合页里扒频道名自动加进配置。新手建议关闭；若开启，系统的「零产出自动剔除」会清掉长期不发链接的噪音频道，否则噪音越积越多、拖慢抓取还易触发限流。</p>
+      <p class="hint">⚠️ 自动发现会从聚合页里扒频道名，先扫 1 页验证磁力（verify_threshold >= 1），有磁力才入库。若开启，系统的「零产出自动剔除」还会清掉长期不发链接的噪音频道。</p>
       <button class="btn" id="rt-prune" style="margin-top:8px">🧹 清理无效频道（移除长期 0 链接的噪音频道）</button>
       <button class="btn primary" id="rt-reset" style="margin-top:8px; margin-left:8px">⭐ 恢复精选频道(28)</button>
       <div id="rt-prune-out" class="hint" style="margin-top:8px"></div>
@@ -530,6 +534,7 @@ async function renderTab() {
       S.history_pages = Math.max(1, Number($("#rt-pages").value) || 3);
       S.discovery = S.discovery || {};
       S.discovery.enabled = $("#rt-disc").checked;
+      S.discovery.verify_threshold = Math.max(0, Number(S.discovery.verify_threshold) || 1);
       S.dedup = S.dedup || {};
       S.dedup.cloud_check_new = $("#dd-cloud").checked;
       S.dedup.upgrade = $("#dd-upg").checked;
