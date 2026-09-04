@@ -407,7 +407,7 @@ def start_discovery(cfg: AppConfig, config_path: str, scraper: WebScraper | None
 
     disc = ChannelDiscovery(
         seed_urls=d.seed_urls, seed_file=d.seed_file, interval_hours=d.interval_hours,
-        proxy=cfg.source.proxy,
+        proxy=cfg.source.proxy, verify_threshold=d.verify_threshold,
     )
     disc.load_known(cfg.source.channels)
 
