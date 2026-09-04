@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.1.0（2026-09-04）
+
+- **新增 TG 机器人遥控**（`adapters/tgbot.py`，可选，装 `pyTelegramBotAPI` 后在配置 `bot.enabled=true` 开启）：
+  - 手机上直接给机器人**发磁力/迅雷/电驴链接即转存**，走与频道监听同一套去重、过滤、自动分类、改名流程；
+  - `/status` 查看监听状态与光鸭离线任务进度、`/pause` `/resume` 暂停/恢复、`/add 频道名` 加频道、`/help` 帮助；
+  - 转存/跳过/洗版/失败**结果私聊推送**（`bot.notify` 可关）；
+  - 权限控制：只响应 `bot.admin_ids` 里的用户，未配置时默认拒绝所有人，防止机器人被陌生人滥用来写你的网盘。
+- Web 面板新增**「TG 机器人」设置页**：开关、Token、管理员 ID、结果推送，保存后配置即时写回。
+- `config.example.yaml` 增加 `bot:` 配置段与说明；Docker 镜像自带依赖，无需额外安装。
+- 配套离线单测 `tests/test_bot_offline.py`（18 例，不联网：配置解析/权限/命令回调/主流程吃 BotMessage）。
+
 ## v1.0.7（2026-09-03）
 
 - **修复 `yaml.safe_dump` 的 `sort_keys` 参数**：Python 3.7 的 PyYAML 3.13 不支持该参数，
