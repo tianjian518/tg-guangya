@@ -74,6 +74,7 @@ class DiscoveryConfig:
     interval_hours: float = 24.0
     seed_urls: list[str] = field(default_factory=list)
     seed_file: str = ""        # 本地种子文件（每行一个 @用户名 或 t.me/xxx）
+    verify_threshold: int = 1  # 新发现频道至少要有 N 条磁力才入库；0=不验证
 
 
 @dataclass
@@ -198,6 +199,7 @@ class AppConfig:
             interval_hours=float(d.get("interval_hours", 24.0)),
             seed_urls=[str(x).strip() for x in (d.get("seed_urls") or []) if x],
             seed_file=str(d.get("seed_file", "")).strip(),
+            verify_threshold=max(0, int(d.get("verify_threshold", 1))),
         )
         og = raw.get("organize") or {}
         cfg.organize = OrganizeConfig(
@@ -305,6 +307,7 @@ class AppConfig:
                 "interval_hours": self.discovery.interval_hours,
                 "seed_urls": list(self.discovery.seed_urls),
                 "seed_file": self.discovery.seed_file,
+                "verify_threshold": self.discovery.verify_threshold,
             },
             "organize": {
                 "enabled": self.organize.enabled,
@@ -364,6 +367,8 @@ class AppConfig:
             self.discovery.seed_urls = [str(x).strip() for x in d["seed_urls"] if x]
         if "seed_file" in d:
             self.discovery.seed_file = str(d["seed_file"]).strip()
+        if "verify_threshold" in d:
+            self.discovery.verify_threshold = max(0, int(d["verify_threshold"]))
         og = s.get("organize") or {}
         if "enabled" in og:
             self.organize.enabled = bool(og["enabled"])
