@@ -39,6 +39,8 @@ UA = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+MAGNET_RE = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>）】]*", re.I)
+
 
 class ChannelDiscovery:
     MAX_CHANNELS = 50  # 自动发现上限，防止死频道撑爆轮询
@@ -49,6 +51,7 @@ class ChannelDiscovery:
         interval_hours: float = 24.0,
         timeout: int = 25,
         proxy: str = "",
+        verify_threshold: int = 1,
     ) -> None:
         self.seed_urls = [str(u).strip() for u in (seed_urls or []) if u]
         self.seed_file = seed_file
@@ -64,6 +67,8 @@ class ChannelDiscovery:
             })
         self.known: Set[str] = set()
         self._stop = threading.Event()
+        # 新频道至少要有 N 条磁力才能被入库；0 = 不验证（全入库，兼容旧行为）
+        self.verify_threshold = max(0, int(verify_threshold))
 
     def load_known(self, channels: Iterable[str]) -> None:
         self.known = {str(c).strip().lstrip("@").lower() for c in channels if c}
@@ -116,20 +121,62 @@ class ChannelDiscovery:
                      len(auto_new), self.MAX_CHANNELS, len(seed_names))
         return new
 
+    def verify_channels(self, channels: Iterable[str], pages: int = 1,
+                        delay: float = 0.8) -> Set[str]:
+        """扫指定频道各 pages 页，只保留能产出 >= verify_threshold 条磁力的频道。
+
+        返回经磁力验证后值得入库的频道集合。verify_threshold == 0 时跳过验证、全部通过。
+        """
+        if self.verify_threshold <= 0 or not channels:
+            return set(channels)
+        valid: Set[str] = set()
+        skipped: list[str] = []
+        for ch in sorted(channels):
+            try:
+                url = f"https://t.me/s/{ch}"
+                r = self._session.get(url, timeout=self.timeout)
+                if r.status_code != 200:
+                    skipped.append(ch)
+                    continue
+                magnets = 0
+                for _ in range(pages):
+                    for m in MAGNET_RE.finditer(r.text):
+                        magnets += 1
+                        if magnets >= self.verify_threshold:
+                            break
+                    if magnets >= self.verify_threshold:
+                        break
+                if magnets >= self.verify_threshold:
+                    valid.add(ch)
+                else:
+                    skipped.append(ch)
+            except Exception as exc:
+                log.debug("验证 %s 失败: %s", ch, exc)
+                skipped.append(ch)
+            time.sleep(delay)
+        if skipped:
+            log.info("磁力验证完成: %d 通过，%d 跳过（无磁力/不可达）: %s",
+                     len(valid), len(skipped), ", ".join(skipped[:20]))
+        else:
+            log.info("磁力验证完成: %d 全部通过", len(valid))
+        return valid
+
     def run(self, on_new: Callable[[Set[str]], None]) -> None:
         log.info(
-            "频道自动发现已启动 | 种子源 %d 个 | 间隔 %.1fh",
+            "频道自动发现已启动 | 种子源 %d 个 | 间隔 %.1fh | 磁力验证阈值=%d",
             len(self.seed_urls) + (1 if self.seed_file else 0),
             self.interval / 3600,
+            self.verify_threshold,
         )
         while not self._stop.is_set():
             try:
                 new = self.discover_once()
                 if new:
                     log.info("发现 %d 个新频道: %s", len(new), ", ".join(sorted(new)[:30]))
+                    verified = self.verify_channels(new)
                     self.known |= {n.lower() for n in new}
                     try:
-                        on_new(new)
+                        on_new(verified)
                     except Exception as exc:
                         log.warning("处理新频道时出错: %s", exc)
             except Exception as exc:
