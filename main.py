@@ -200,17 +200,16 @@ def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
 
 
 def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int,
-               cn_title: str = "") -> tuple[bool, str, str, str]:
+               cn_title: str = "") -> tuple[bool, str, str, str, bool | None]:
     """提交单个链接到光鸭离线下载。
 
-    返回 (ok, task_id, name, final_status_text)。
+    返回 (ok, task_id, name, final_status_text, rename_ok)。
+    rename_ok 为 None 表示未尝试改名（无中文标题），True 成功，False 失败。
     提交后会等待离线任务完成（最多 _OFFLINE_WAIT_TIMEOUT 秒），
     超时或失败时仍返回 ok=True（因为任务已创建，只是未完成）。
-
-    cn_title 为 Telegram 中文标题；若提供，会把离线下载生成的【外层文件夹】
-    （电影/剧集所在的目录）重命名为中文标题，里面的文件保持原名不动。
     """
     last_err = ""
+    rename_ok: bool | None = None
     # 中文文件夹名（不带文件后缀）：创建时先尝试指定，完成后再校验 + rename 兜底
     cn_folder = build_cn_filename(cn_title) if cn_title else ""
     for attempt in range(1, max_retries + 1):
@@ -226,24 +225,25 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
                 # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面的文件）
                 if cn_folder:
                     try:
-                        _rename_folder_to_cn(client, task_id, name, parent_id, cn_folder)
+                        rename_ok = _rename_folder_to_cn(client, task_id, name, parent_id, cn_folder)
                     except GuangyaError as exc:
+                        rename_ok = False
                         log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
-                return True, task_id, name, "done"
+                return True, task_id, name, "done", rename_ok
             if status_code in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
                 log.warning("任务 %s 失败: %s", task_id, msg)
-                return False, task_id, name, f"failed: {msg}"
+                return False, task_id, name, f"failed: {msg}", rename_ok
             # 超时或未结束：任务仍在进行中，视为提交成功
             log.info("任务 %s 仍在进行中: %s", task_id, msg)
-            return True, task_id, name, "pending"
+            return True, task_id, name, "pending", rename_ok
         except GuangyaError as exc:
             last_err = str(exc)
             low = last_err.lower()
             if "次数" in last_err or "限额" in last_err or "quota" in low:
-                return False, "", f"离线配额不足: {last_err}", "quota_exceeded"
+                return False, "", f"离线配额不足: {last_err}", "quota_exceeded", rename_ok
             if attempt < max_retries:
                 time.sleep(min(30, attempt * 5))
-    return False, "", last_err, "error"
+    return False, "", last_err, "error", rename_ok
 
 
 def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
@@ -315,7 +315,7 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
             target, category = pick_target(msg.text)
-            ok2, task_id, name, final_status = submit_one(
+            ok2, task_id, name, final_status, rename_ok = submit_one(
                 client, url, target, max_retries, cn_title=msg.text)
             if ok2:
                 db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
@@ -329,8 +329,14 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 tag = "♻️ 洗版转存" if is_upgrade else "✅ 已转存"
                 if final_status == "done":
                     tag += "（已完成）"
-                log.info("%s %s: %s | 任务 %s [%s]", tag, where, parsed.get("title") or msg.text[:40], task_id, final_status)
-                notifier.send(f"{tag} {where}: {msg.text[:70]} (任务 {task_id})")
+                # 改名状态追加到通知
+                rename_hint = ""
+                if rename_ok is True:
+                    rename_hint = " 📁已改中文"
+                elif rename_ok is False:
+                    rename_hint = " ⚠️ 改名失败（保持英文）"
+                log.info("%s %s: %s | 任务 %s [%s] rename=%s", tag, where, parsed.get("title") or msg.text[:40], task_id, final_status, rename_ok)
+                notifier.send(f"{tag} {where}: {msg.text[:70]} (任务 {task_id}){rename_hint}")
             else:
                 # 注意：此处原先引用了未定义的 msg_text，一旦提交失败就会抛
                 # NameError 中断整轮处理。失败原因应取 submit_one 返回的 name
