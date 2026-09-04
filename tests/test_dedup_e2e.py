@@ -93,7 +93,8 @@ def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None,
                        cloud_check_new=cfg.dedup.cloud_check_new,
                        cache_ttl=cfg.dedup.cache_ttl,
                        organize_enabled=cfg.organize.enabled,
-                       upgrade=upgrade)
+                       upgrade=upgrade,
+                       require_cn=getattr(cfg.dedup, "require_cn", True))
     return client, resolver, classifier, store, dedup
 
 
@@ -300,6 +301,28 @@ def test_cases():
     results.append(("洗版/新质量更高则替换", "upgrade", d.action))
     if d.action == "upgrade":
         results.append(("洗版/携带待删旧文件id", "有", "有" if d.replace_file_id else "无"))
+
+    # 28) 【中文规范准入】纯英文标题：无法规范成中文片名 → 放弃链接（不入盘）
+    c, r, clf, st, dd = build()  # 云端空
+    d = dd.decide("h_en_movie", "Oppenheimer 2023 4K WEB-DL English", st)
+    results.append(("准入/纯英文无法中文命名", "reject", d.action))
+
+    # 29) 【整理归类准入】自动分类被关闭 → 没归类可进 → 一律放弃（不许裸丢根目录）
+    cfg2 = AppConfig.load(str(BASE / "data" / "config.yaml"))
+    cfg2.organize.enabled = False
+    c2 = FakeGuangya()
+    root2 = c2.create_folder("", "TG转存")
+    clf2 = Classifier()
+    r2 = CategoryResolver(c2, root_id=root2, create_missing=False)
+    st2 = Store(":memory:")
+    dd2 = CloudDedup(c2, r2, clf2, cloud_check_new=True, organize_enabled=False)
+    d = dd2.decide("h_noorg", "流浪地球2 2023 4K 国语中字", st2)
+    results.append(("准入/未开自动分类则放弃", "reject", d.action))
+
+    # 30) 【准入通过】中文标题 + 明确中文分类（国产剧）→ 正常落盘
+    c, r, clf, st, dd = build()
+    d = dd.decide("h_ok", "庆余年 第6集 2160p 中字", st)
+    results.append(("准入/中文名+中文分类通过", "transfer", d.action))
 
     ok = 0
     for name, exp, got in results:
