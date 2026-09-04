@@ -56,7 +56,8 @@ _TECH = re.compile(
     r"|\b(blu[- ]?ray|bluray|bdrip|brrip|web[- ]?dl|webrip|webdl|remux|hdtv|hdrip|"
     r"dvdrip|dvdr|h264|h265|x264|x265|hevc|avc|mpeg|yuv420p)\b"
     r"|\b(remastered|restored|imax|hdr10?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
-    r"truehd|dts[- ]?hd|dts|x|ac3|aac|flac|lpcm|5\.1|7\.1|10bit|8bit)\b"
+    r"truehd|dts[- ]?hd|dts[- ]?x|ac3|aac|flac|lpcm|5\.1|7\.1|10bit|8bit)\b"
+    r"|dd5\.1|dts5\.1|eac3|e-\s*ac3|atmos|ma|mlp"
     r"|\.(mkv|mp4|avi|ts|rmvb|rm|iso|mov|wmv|flv|m2ts)(?=\s|$)"
 )
 
@@ -67,6 +68,7 @@ _NOISE_WORDS = re.compile(
     r"未删减|加长版|导演剪辑版|终极版|完整版|无水印|官方|预告|花絮|合集|特别篇|番外|"
     r"修复版|重制版|国漫|动漫|经典|独家|首发|限时|免费|会员|"
     r"迅雷|百度|夸克|阿里|网盘|磁力|种子|下载|资源|高清修复|"
+    r"原版|双音|原音|原声|国语|韩语|日语|英语|配音|Dubbed|DUBBED|Lion|Mandarin|"
     r"web[- ]?dl|webrip|bdrip|brrip|remux|hdtv|hdrip|dvdrip|bluray|blu[- ]?ray|"
     r"h264|h265|x264|x265|hevc|avc|yuv420p|10bit|8bit)",
     re.I,
@@ -593,6 +595,8 @@ _EN_TO_CN = {
         "bullettrain": "子弹列车",
     "ambulance": "亡命救护车",
         "thebatman": "新蝙蝠侠",
+    "thewanderingearth": "流浪地球",
+    "thewanderingearth2": "流浪地球2",
     "avatar2": "阿凡达2",
         "avatarthewayofwater": "阿凡达2",
         "blackpantherwakandaforever": "黑豹2",
