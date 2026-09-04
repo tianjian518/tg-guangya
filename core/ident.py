@@ -169,6 +169,8 @@ class ResourceInfo:
     - is_pack: 是否多集打包推送（含 全集/更新至/1-5集 等聚合标记）
     - folder: 落盘文件夹名（同内容的不同写法，此值一致）
     - key:    账本主键（folder 的小写字母数字形），云端/本地查重都用它
+    - region_hint: 地区提示（由 core 语言特征自动推断），供分类器优先使用。
+                   非空时分类器直接采信，绕过原始标题的语言推断规则。
     """
     title: str = ""
     core: str = ""
@@ -177,6 +179,7 @@ class ResourceInfo:
     is_pack: bool = False
     folder: str = ""
     key: str = ""
+    region_hint: str = ""   # "cn" / "jpkr" / "west" / ""（空=无提示）
 
 
 def _norm(s: str) -> str:
@@ -931,17 +934,22 @@ def analyze(title: str) -> ResourceInfo:
             r"|\bs\d{1,2}\b",
             " ", core_src)
     info.core = _strip_noise(core_src)
-    # 纯英文核心：先剥尾部数字再翻译（避免 "RandomMovie999" 之类误判），然后尝试映射表翻译
+    translated_from_en = False
     if not re.search(r"[一-鿿]", info.core or ""):
         info.core = _strip_noise(info.core, strip_trailing_nums=True)
         translated = _try_translate_core(info.core)
         if translated:
             info.core = translated
+            translated_from_en = True
     # 中文片名为主时，丢掉夹带的英文（不同频道常写不同译名/写不写英文，会破坏账本一致性）
     if _KEEP.search(info.core) and re.search(r"[一-鿿]", info.core):
         info.core = re.sub(r"[a-zA-Z]", "", info.core)
         info.core = "".join(_KEEP.findall(info.core))
-
+    # 地区提示：仅在原始标题本身含中文时设 cn（港片/华语片），
+    # 纯英文标题经翻译变成中文的（如 The Matrix→黑客帝国）不算，
+    # 否则会把好莱坞电影误判成华语电影。
+    if re.search(r"[一-鿿]", raw) and not translated_from_en:
+        info.region_hint = "cn"
     # 组装文件夹名
     if info.sig:
         folder = f"{info.core}.{info.sig.upper()}" if info.core else info.sig.upper()
