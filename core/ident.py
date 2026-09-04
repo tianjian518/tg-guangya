@@ -101,7 +101,7 @@ _PACK = re.compile(
     r"全集|全\s*\d+\s*[集话話]|共\s*\d+\s*[集话話]|更新至|更新到|连载|连更|合集|"
     r"\d{1,3}\s*[-~至]\s*\d{1,3}\s*[集话話]|"                                  # 1-5集 / 1~5集 / 1至5集
     r"s\d{1,2}\s*[-~]\s*s?\d{1,2}\b|"                                          # S01-S02
-    r"(?i)\bpart\s*\d+\s*(&|and|与)\s*(?:part\s*)?\d+\b",                       # Part 1 & 2 / Part I & II
+    r"\bpart\s*\d+\s*(&|and|与)\s*(?:part\s*)?\d+\b",                       # Part 1 & 2 / Part I & II
     re.I,
 )
 
