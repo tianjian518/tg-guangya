@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # ---------- 版本号（单一来源，改这一处即可） ----------
-__version__ = "1.4.0"
+__version__ = "1.5.1"  # 本地词典翻译/搜索清洗 + DTS点号分隔 + 年份点号识别 + 启动探活
 
 import argparse
 import base64
