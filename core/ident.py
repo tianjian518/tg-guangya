@@ -98,7 +98,8 @@ _EP_EN = re.compile(r"(?i)\bep\.?\s*(\d{1,3})\b")                              #
 _PACK = re.compile(
     r"全集|全\s*\d+\s*[集话話]|共\s*\d+\s*[集话話]|更新至|更新到|连载|连更|合集|"
     r"\d{1,3}\s*[-~至]\s*\d{1,3}\s*[集话話]|"                                  # 1-5集 / 1~5集 / 1至5集
-    r"s\d{1,2}\s*[-~]\s*s?\d{1,2}\b",                                          # S01-S02
+    r"s\d{1,2}\s*[-~]\s*s?\d{1,2}\b|"                                          # S01-S02
+    r"(?i)\bpart\s*\d+\s*(&|and|与)\s*(?:part\s*)?\d+\b",                       # Part 1 & 2 / Part I & II
     re.I,
 )
 
@@ -574,6 +575,11 @@ _EN_TO_CN = {
         "projecta2": "A计划2",
         "wang'sfight": "龙拳",
         "fistoffury": "精武门",
+    # 周星驰经典
+    "chineseodyssey": "大话西游",
+    "chineseodisseypart1": "大话西游之月光宝盒",
+    "chineseodisseypart2": "大话西游之大圣娶亲",
+    "chineseodyssey2": "大话西游2",
     # 近五年热门（2020-2026）
     "dune": "沙丘",
     "dunepart2": "沙丘2",
@@ -766,6 +772,8 @@ _EN_PHRASES = {
     "interstellar": "星际穿越",
     "gladiator": "角斗士",
     "the dark knight": "蝙蝠侠：黑暗骑士",
+    "chinese odyssey": "大话西游",
+    "a chinese odyssey": "大话西游",
 }
 
 
@@ -815,6 +823,10 @@ def _try_translate_core(core: str) -> str:
     # (?<=[a-zA-Z]) 确保 S 前面是字母（处理 "BreakingBadS01" 这种粘连情况）
     core_clean = re.sub(r'(?i)(?<=[a-zA-Z])s\d{1,2}(?=$|[^a-zA-Z0-9])', '', core)
     core_clean = re.sub(r'(?i)\b(?:s\d{1,2}e\d{1,2}|ep\s*\d+)\b', '', core_clean)
+    # 剥掉 "Part 1 & 2" / "Part1&2" / "Part12MA" 等多部分电影噪声
+    # 先处理有空格的原版（Part 1 & 2），再处理粘连版（Part12MA）
+    core_clean = re.sub(r'(?i)\bpart\s*\d+\s*(&|and|与)\s*(?:part\s*)?\d+\b', ' ', core_clean)
+    core_clean = re.sub(r'(?i)part\d+', '', core_clean)  # Part1 / Part12 / PartII 等（不含\b，避免粘连情况）
     core_clean = core_clean.strip()
     low = core_clean.lower().replace("_", "").replace("-", "").replace(" ", "")
     if not low:
