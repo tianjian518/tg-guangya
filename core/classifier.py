@@ -218,21 +218,24 @@ class Classifier:
         self.region_rules = list(_REGION_RULES) + list(extra_region_rules or [])
 
     # ---------- 主入口 ----------
-    def classify(self, title: str, extra: str = "") -> ClassifyResult:
+    def classify(self, title: str, extra: str = "", region_hint: str = "") -> ClassifyResult:
         """判定分类。
 
-        :param title: 原始频道标题（保留栏目前缀、语言标签、英文原名——
-                      这些是地区判定的真实信号，绝不能先剥掉）
-        :param extra: 补充文本，通常是 ident 产出的规范中文名 info.folder
+        :param title:     原始频道标题（保留栏目前缀、语言标签、英文原名——
+                          这些是地区判定的真实信号，绝不能先剥掉）
+        :param extra:     补充文本，通常是 ident 产出的规范中文名 info.folder
+        :param region_hint: 地区提示，由 ident 根据 core 语言特征推断（如 core 含中文→"cn"）。
+                            非空时直接采信，跳过原始标题的语言兜底推断。
 
         地区判定优先级（高 → 低）：
           1. 显式语言/地区标签：粤语/日语/韩语/英语/国语/美国/东京…（权重 4）
-          2. 频道栏目前缀里的地区词：日韩剧/欧美电影/国产剧…（权重 2）
-          3. 原标题语言推断：几乎无中文→欧美；中文为主→华语（权重 2）
+          2. ident region_hint：core 含中文 → 直接判华语（权重 4，最高）
+          3. 频道栏目前缀里的地区词：日韩剧/欧美电影/国产剧…（权重 2）
+          4. 原标题语言推断：几乎无中文→欧美；中文为主→华语（权重 2）
 
-        ⚠️ 历史 bug：曾把「已翻译成中文的 folder」单独喂进来，靠它的中文占比
-        推断地区，结果所有外语片的中文译名都被判成华语（黑客帝国→华语电影、
-        盗梦空间→华语电影）。中文占比必须只看「原始标题」，不能看中文译名。
+        ⚠️ 历史 bug：纯英文标题的港片（如 "A Chinese Odyssey"）被兜底判成欧美电影，
+        因为核心虽已翻译成中文，但原始标题英文占比高。region_hint 解决了这个问题：
+        core 含中文就直接标记为华语，不再受原始标题语言干扰。
         """
         text = f"{title or ''} {extra or ''}"[:600]
         if not text.strip():
@@ -258,26 +261,31 @@ class Classifier:
                 kind, kind_score = KIND_MOVIE, 1
                 signals.append("兜底:无明确信号→按电影处理")
 
-        # 地区兜底：显式语言标签没命中时，依次退到「栏目前缀」→「原标题语言」
+        # 地区兜底：显式语言标签没命中时，依次退到「ident hint → 栏目前缀」→「原标题语言」
         if not region or region_score == 0:
-            prefix = self._prefix_region(title)
-            if prefix:
-                region, region_score = prefix, 2
-                signals.append(f"栏目前缀→{REGION_NAMES.get(prefix, prefix)}")
+            # ident 已根据 core 语言特征推断出地区提示，直接采信
+            if region_hint:
+                region, region_score = region_hint, 4
+                signals.append(f"core含中文→{REGION_NAMES.get(region_hint, region_hint)}")
             else:
-                # 中文占比只看原始标题（剥掉栏目前缀）。绝不能用 text——
-                # 它含已翻译成中文的 folder，会让所有外语片译名都判成华语。
-                base = _LEADING_CATEGORY.sub("", title or "").strip() or (title or "")
-                ratio = _cjk_ratio(base)
-                if ratio >= 0.25:
-                    region, region_score = REGION_CN, 2
-                    signals.append(f"兜底:原标题以中文为主({ratio:.0%})→华语")
-                elif ratio <= 0.05:
-                    region, region_score = REGION_WEST, 2
-                    signals.append(f"兜底:原标题几乎无中文({ratio:.0%})→欧美")
+                prefix = self._prefix_region(title)
+                if prefix:
+                    region, region_score = prefix, 2
+                    signals.append(f"栏目前缀→{REGION_NAMES.get(prefix, prefix)}")
                 else:
-                    region, region_score = REGION_OTHER, 1
-                    signals.append(f"兜底:原标题中英混排({ratio:.0%})→其他")
+                    # 中文占比只看原始标题（剥掉栏目前缀）。绝不能用 text——
+                    # 它含已翻译成中文的 folder，会让所有外语片译名都判成华语。
+                    base = _LEADING_CATEGORY.sub("", title or "").strip() or (title or "")
+                    ratio = _cjk_ratio(base)
+                    if ratio >= 0.25:
+                        region, region_score = REGION_CN, 2
+                        signals.append(f"兜底:原标题以中文为主({ratio:.0%})→华语")
+                    elif ratio <= 0.05:
+                        region, region_score = REGION_WEST, 2
+                        signals.append(f"兜底:原标题几乎无中文({ratio:.0%})→欧美")
+                    else:
+                        region, region_score = REGION_OTHER, 1
+                        signals.append(f"兜底:原标题中英混排({ratio:.0%})→其他")
 
         category = self._to_category(kind, region)
         # 置信度：两套打分归一化后取平均，上限 1
