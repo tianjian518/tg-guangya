@@ -412,9 +412,10 @@ class CloudDedup:
         cat = ""
         if self.organize_enabled:
             try:
-                # 用已翻译的中文 folder 分类，而非原始英文标题（否则港片会被判成欧美）
-                classify_title = info.folder or title
-                cr = self.classifier.classify(classify_title)
+                # 原始标题 + 规范中文名一起喂给分类器：
+                # 地区信号（英语/日语/韩语/栏目前缀/英文原名）只在原始标题里，
+                # 中文名只作形态与地名的补充。只传中文 folder 会让所有外语片判成华语。
+                cr = self.classifier.classify(title, extra=info.folder)
                 cat = cr.category
             except Exception:  # noqa: BLE001
                 cr = None
