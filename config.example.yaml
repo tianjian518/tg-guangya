@@ -75,6 +75,8 @@ bot:
   notify: true                    # 转存/跳过/失败的结果是否推送给你
   proxy: ""                       # 留空则沿用 sources.proxy
   allow_anyone: false             # true = 谁都能用（不建议，等于开放你的网盘）
+  search_enabled: true            # /s 全网磁力搜索（引擎 apibay=海盗湾公开API；运行机需把 apibay.org 真实IP写进 /etc/hosts，详见 core/magnet_search.py）
+  search_engines: [apibay]        # 可同时启用多个，未来扩展
 
 # ===== 频道自动发现 =====
 # 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，自动追加进本配置。
