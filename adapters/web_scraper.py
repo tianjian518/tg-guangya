@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterator
@@ -88,6 +89,8 @@ class WebScraper:
         self.interval = max(30, int(interval))
         self.timeout = timeout
         self.proxy = proxy or None
+        # 置位=暂停轮询（TG 机器人 /pause 用）。暂停时不抓频道、但仍然保持进程活着。
+        self.pause_event = threading.Event()
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": UA, "Accept-Language": "zh-CN,zh;q=0.9"})
         if self.proxy:
@@ -181,6 +184,11 @@ class WebScraper:
         while True:
             if stop_event and stop_event.is_set():
                 break
+            # 暂停期间原地空转（低频检查，不占 CPU），恢复后立即继续
+            while self.pause_event.is_set():
+                if stop_event and stop_event.is_set():
+                    return
+                time.sleep(2)
             round_num += 1
             processed = 0
             active_channels = [c for c in self.channels if failures.get(c, 0) < max_consecutive_failures]
