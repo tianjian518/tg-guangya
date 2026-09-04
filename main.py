@@ -23,7 +23,8 @@ import time
 
 from adapters.web_scraper import WebScraper, link_key, extract_links
 from adapters.userbot import UserbotSource
-from core.guangya import GuangyaClient, GuangyaError
+from adapters.tgbot import TgBot, BotMessage
+from core.guangya import GuangyaClient, GuangyaError, STATUS_TEXT
 from core.store import Store, MagnetRecord
 from core.matcher import KeywordFilter, parse_title
 from core.naming import build_cn_filename
@@ -261,9 +262,13 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 log.info("%s %s: %s | 任务 %s [%s]", tag, where, parsed.get("title") or msg.text[:40], task_id, final_status)
                 notifier.send(f"{tag} {where}: {msg.text[:70]} (任务 {task_id})")
             else:
-                store.update(h, status="failed", reason=msg_text)
-                log.warning("❌ 提交失败: %s | %s", msg.text[:50], msg_text)
-                notifier.send(f"❌ 失败: {msg.text[:60]} | {msg_text[:80]}")
+                # 注意：此处原先引用了未定义的 msg_text，一旦提交失败就会抛
+                # NameError 中断整轮处理。失败原因应取 submit_one 返回的 name
+                # （失败时它是错误描述）与 final_status。
+                reason = (name or final_status or "提交失败")[:200]
+                store.update(h, status="failed", reason=reason)
+                log.warning("❌ 提交失败: %s | %s", msg.text[:50], reason)
+                notifier.send(f"❌ 失败: {msg.text[:60]} | {reason[:80]}")
     return handler
 
 
@@ -344,6 +349,164 @@ def start_discovery(cfg: AppConfig, config_path: str, scraper: WebScraper | None
 
     threading.Thread(target=disc.run, args=(on_new,), daemon=True, name="discovery").start()
     return disc
+
+
+_STATUS_ICON = {
+    "done": "✅", "submitted": "⏳", "upgraded": "♻️",
+    "failed": "❌", "skipped": "⏭️", "pending": "⏳",
+}
+
+
+def _fmt_size(n: int) -> str:
+    """字节转人类可读大小。"""
+    try:
+        n = float(n or 0)
+    except (TypeError, ValueError):
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{int(n)}B"
+        n /= 1024
+    return "-"
+
+
+def start_bot(cfg: AppConfig, config_path: str, store: Store, client: GuangyaClient,
+              handler, scraper: WebScraper | None, notifier: Notifier) -> TgBot | None:
+    """启动 TG 机器人（可选）：命令交互 + 转存结果推送。
+
+    未启用或没填 token 时返回 None，不影响原有流程。
+    所有动作都复用主流程的 handler，保证机器人提交的链接和频道抓到的
+    走完全相同的过滤 / 去重 / 分类 / 洗版逻辑。
+    """
+    b = cfg.bot
+    if not b.enabled or not b.token:
+        return None
+
+    def _run_handler(msg: BotMessage) -> None:
+        """在独立线程里跑提交——离线任务可能要等几分钟，不能卡住机器人。"""
+        try:
+            handler(msg)
+        except Exception as exc:  # noqa: BLE001 - 机器人侧的异常不能拖垮主流程
+            log.warning("机器人提交的链接处理失败: %s", exc)
+            notifier.send(f"❌ 机器人提交处理失败: {exc}")
+
+    def _submit(text: str, chat_id: int) -> str:
+        links = extract_links(text or "")
+        if not links:
+            return ("没识别到可下载的链接。\n"
+                    "支持：磁力 magnet: / 迅雷 thunder: / 电驴 ed2k: / http 直链。")
+        msg = BotMessage(links=links, text=(text or "")[:200],
+                         channel="tgbot", message_id=str(chat_id))
+        threading.Thread(target=_run_handler, args=(msg,),
+                         daemon=True, name="bot-submit").start()
+        return f"📥 收到 {len(links)} 个链接，已开始提交（结果稍后推送）。"
+
+    def _status() -> str:
+        try:
+            tasks = client.list_tasks()
+        except GuangyaError as exc:
+            return f"查询失败：{exc}"
+        if not tasks:
+            return "当前没有离线任务。"
+        running = [t for t in tasks if not t.finished]
+        ok = [t for t in tasks if t.status == GuangyaClient.STATUS_SUCCESS]
+        bad = [t for t in tasks if t.finished and not t.ok]
+        lines = [f"📊 进行中 {len(running)} ｜ 完成 {len(ok)} ｜ 失败 {len(bad)}"]
+        for t in running[:8]:
+            name = (t.name or "未命名")[:28]
+            lines.append(f"⏳ {name} — {t.progress}% · {_fmt_size(t.size)} "
+                         f"· {STATUS_TEXT.get(t.status, '')}")
+        for t in bad[:4]:
+            lines.append(f"❌ {(t.name or '未命名')[:28]} — {(t.message or '失败')[:30]}")
+        if len(running) > 8:
+            lines.append(f"（进行中还有 {len(running) - 8} 条未列）")
+        return "\n".join(lines)
+
+    def _stats() -> str:
+        st = store.stats()
+        total = sum(st.values())
+        if not total:
+            return "还没有任何记录。"
+        order = ["done", "upgraded", "submitted", "skipped", "failed", "pending"]
+        parts = [f"{_STATUS_ICON.get(k, '•')}{k} {st[k]}"
+                 for k in order if st.get(k)]
+        other = [f"•{k} {v}" for k, v in st.items() if k not in order]
+        return "📈 *转存统计*\n\n共 %d 条\n%s" % (total, "\n".join(parts + other))
+
+    def _pause(want_pause: bool) -> str:
+        if scraper is None:
+            return "当前是 userbot 模式，不支持暂停/恢复。"
+        if want_pause:
+            scraper.pause_event.set()
+            return "⏸ 已暂停频道轮询（机器人里提交的链接照常处理）。"
+        scraper.pause_event.clear()
+        return "▶️ 已恢复频道轮询。"
+
+    def _channels() -> list[str]:
+        return list(cfg.source.channels)
+
+    def _sync_scraper() -> None:
+        """配置改动后同步给正在运行的抓取器，否则要重启才生效。"""
+        if scraper is not None:
+            scraper.channels = [WebScraper._normalize(c) for c in cfg.source.channels]
+
+    def _add(name: str) -> str:
+        n = cfg.add_channels([name], config_path)
+        if n == 0:
+            return f"频道 `{name}` 已在列表里。"
+        _sync_scraper()
+        return f"➕ 已添加 `{name}`（共 {len(cfg.source.channels)} 个频道）"
+
+    def _del(name: str) -> str:
+        before = len(cfg.source.channels)
+        cfg.source.channels = [c for c in cfg.source.channels
+                               if str(c).strip().lower() != name.lower()]
+        if len(cfg.source.channels) == before:
+            return f"频道 `{name}` 不在列表里。"
+        try:
+            cfg.save(config_path)
+        except Exception as exc:  # noqa: BLE001
+            return f"写回配置失败：{exc}"
+        _sync_scraper()
+        return f"➖ 已删除 `{name}`（剩 {len(cfg.source.channels)} 个频道）"
+
+    def _find(kw: str) -> str:
+        try:
+            rows = store.history(limit=500)
+        except Exception as exc:  # noqa: BLE001
+            return f"查询失败：{exc}"
+        low = kw.lower()
+        hits = [r for r in rows if low in (r.title or "").lower()]
+        if not hits:
+            return f"没找到包含「{kw}」的记录。"
+        lines = [f"🔍 「{kw}」命中 {len(hits)} 条（显示前 12）"]
+        for r in hits[:12]:
+            icon = _STATUS_ICON.get(r.status, "•")
+            cat = f" → {r.category}" if r.category else ""
+            lines.append(f"{icon} {(r.title or '未命名')[:38]}{cat}")
+        return "\n".join(lines)
+
+    bot = TgBot(
+        token=b.token,
+        admin_ids=b.admin_ids,
+        proxy=b.proxy or cfg.source.proxy,
+        allow_anyone=b.allow_anyone,
+        on_submit=_submit,
+        on_status=_status,
+        on_stats=_stats,
+        on_pause=_pause,
+        on_channels=_channels,
+        on_add_channel=_add,
+        on_del_channel=_del,
+        on_find=_find,
+    )
+    # 转存结果推送给管理员（与控制台通知并行，互不影响）
+    if b.notify:
+        notifier.on_message(bot.notify)
+    bot.start_thread()
+    log.info("TG 机器人已启用（管理员 %d 位，通知=%s）",
+             len(b.admin_ids), "开" if b.notify else "关")
+    return bot
 
 
 def run_web(cfg: AppConfig, scraper: WebScraper, handler, on_prune=None) -> None:
@@ -437,6 +600,9 @@ def main() -> None:
 
     # 后台任务状态监控（持续更新 submitted → done/failed）
     task_monitor = start_task_monitor(store, client, notifier)
+
+    # TG 机器人（可选）：命令交互 + 结果推送。未启用时返回 None，不影响原流程。
+    start_bot(cfg, args.config, store, client, handler, source_obj, notifier)
 
     log.info("配置加载完成 | 频道 %d 个 | 来源=%s | 自动发现=%s | 自动分类=%s",
              len(cfg.source.channels), cfg.source.type, "开" if disc else "关",
