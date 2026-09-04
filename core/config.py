@@ -42,6 +42,25 @@ class TelegramConfig:
 
 
 @dataclass
+class BotConfig:
+    """Telegram 机器人（可选）：手机上双向控制 + 转存完成通知。
+
+    与上面的 TelegramConfig（userbot 实时监听）是两套互相独立的东西：
+      - TelegramConfig 拿的是「用户账号」的 api_id/api_hash，用于实时监听；
+      - BotConfig 拿的是「机器人」的 token，用于命令交互和推送通知。
+
+    token 从 @BotFather 处申请；admin_ids 填你自己的数字 ID（@userinfobot 可查），
+    留空且 allow_anyone=False 时，机器人只回复 nobody（避免被陌生人乱用）。
+    """
+    enabled: bool = False
+    token: str = ""
+    admin_ids: list[int] = field(default_factory=list)
+    notify: bool = True          # 转存/跳过的处理结果是否推送给管理员
+    proxy: str = ""              # 留空则沿用 sources.proxy
+    allow_anyone: bool = False   # True = 所有人可用（不建议，谁都能往你盘里塞）
+
+
+@dataclass
 class OutputConfig:
     parent_id: str = ""        # 光鸭目标目录 fileId，留空为根
     save_path: str = ""        # 也可填目录名（需已存在）
@@ -87,6 +106,7 @@ class AppConfig:
     source: SourceConfig = field(default_factory=SourceConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    bot: BotConfig = field(default_factory=BotConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     organize: OrganizeConfig = field(default_factory=OrganizeConfig)
@@ -129,6 +149,15 @@ class AppConfig:
             api_id=str(tg.get("api_id", "")).strip(),
             api_hash=str(tg.get("api_hash", "")).strip(),
             session=str(tg.get("session", "tg_user.session")).strip(),
+        )
+        b = raw.get("bot") or {}
+        cfg.bot = BotConfig(
+            enabled=bool(b.get("enabled", False)),
+            token=str(b.get("token", "")).strip(),
+            admin_ids=[int(x) for x in (b.get("admin_ids") or []) if str(x).strip().isdigit()],
+            notify=bool(b.get("notify", True)),
+            proxy=str(b.get("proxy", "")).strip(),
+            allow_anyone=bool(b.get("allow_anyone", False)),
         )
         o = raw.get("output") or {}
         cfg.output = OutputConfig(
@@ -227,6 +256,14 @@ class AppConfig:
                 "api_id": self.telegram.api_id,
                 "api_hash": self.telegram.api_hash,
                 "session": self.telegram.session,
+            },
+            "bot": {
+                "enabled": self.bot.enabled,
+                "token": self.bot.token,
+                "admin_ids": list(self.bot.admin_ids),
+                "notify": self.bot.notify,
+                "proxy": self.bot.proxy,
+                "allow_anyone": self.bot.allow_anyone,
             },
             "output": {
                 "parent_id": self.output.parent_id,
@@ -332,3 +369,17 @@ class AppConfig:
             self.telegram.api_id = str(tg["api_id"]).strip()
         if "api_hash" in tg:
             self.telegram.api_hash = str(tg["api_hash"]).strip()
+        bo = s.get("bot") or {}
+        if "enabled" in bo:
+            self.bot.enabled = bool(bo["enabled"])
+        if "token" in bo:
+            self.bot.token = str(bo["token"]).strip()
+        if "admin_ids" in bo:
+            self.bot.admin_ids = [int(x) for x in (bo.get("admin_ids") or [])
+                                  if str(x).strip().lstrip("-").isdigit()]
+        if "notify" in bo:
+            self.bot.notify = bool(bo["notify"])
+        if "proxy" in bo:
+            self.bot.proxy = str(bo["proxy"]).strip()
+        if "allow_anyone" in bo:
+            self.bot.allow_anyone = bool(bo["allow_anyone"])
