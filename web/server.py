@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # ---------- 版本号（单一来源，改这一处即可） ----------
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 import argparse
 import base64
@@ -438,6 +438,7 @@ def get_settings():
             "cloud_check_new": cfg.dedup.cloud_check_new,
             "cache_ttl": cfg.dedup.cache_ttl,
             "upgrade": cfg.dedup.upgrade,
+            "require_cn": cfg.dedup.require_cn,
         },
         "telegram": {
             "api_id": cfg.telegram.api_id,
