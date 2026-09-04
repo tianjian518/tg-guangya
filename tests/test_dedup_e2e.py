@@ -52,12 +52,15 @@ class FakeGuangya:
         return out
 
 
-def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None, upgrade=False):
+def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None,
+          root_files=None, root_dirs=None, upgrade=False):
     """构造一个测试实例：根目录 + 自动分类子树 + 可选预置云端文件/文件夹。
 
     cloud_files：预置「散文件」（res_type=1），模拟单文件资源。
     cloud_dirs ：预置「文件夹」（res_type=2，磁力离线下载落盘的主要形态）。
     二者都用真实分类目录名（如「华语电影」）。
+    root_files / root_dirs：预置到「转存根目录」，模拟旧版本/其它下载器
+    （MoviePilot 等）平铺在根目录的资源（单文件 / 文件夹）。
     """
     cfg = AppConfig.load(str(BASE / "data" / "config.yaml"))
     if cfg_overrides:
@@ -77,6 +80,12 @@ def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None, upgrade=False):
         for cat, dirname in cloud_dirs:
             pid, _ = resolver.resolve(cat)
             client.create_folder(pid, dirname)
+    if root_files:
+        for fname in root_files:
+            client.dirs[root]["files"][fname] = 1024
+    if root_dirs:
+        for dirname in root_dirs:
+            client.create_folder(root, dirname)
     db = ":memory:"
     store = Store(db)
     dedup = CloudDedup(client, resolver, classifier,
@@ -159,6 +168,21 @@ def test_cases():
     d = dd.decide("hash_heiye3", "【电影】黑夜告白 2026 2160p", st)
     results.append(("续集2不被前作误杀", "transfer", d.action))
 
+    # 19) 【核心回归】MoviePilot/压制组长文件名平铺在「根目录」（本项目的分类目录下
+    #     没有这条资源）：白夜追凶 整剧包目录带 {tv tmdb-73982}/[S01-S02]/体积尾巴，
+    #     新来的同片磁力（中文标题）→ skip_exists
+    #     （旧 title_core 剥不净这些尾巴 → 判「云端没有」→ 反复复制副本，文件夹/单文件皆然）
+    c, r, clf, st, dd = build(root_dirs=[
+        "白夜追凶 (2017){tv tmdb-73982}[S01-S02][2160p][HEVC][AAC][中字][2.0](67.7GB 61个文件)"])
+    d = dd.decide("hash_byz", "【剧集】白夜追凶 全30集 高清中字", st)
+    results.append(("根目录MoviePilot长名文件夹", "skip_exists", d.action))
+
+    # 20) 单文件同样形态：MoviePilot 单文件带 tag，频道推中文标题 → skip_exists
+    c, r, clf, st, dd = build(root_files=[
+        "流浪地球2 (2023){movie tmdb-1983}[4K HDR][HEVC][中字].mkv"])
+    d = dd.decide("hash_ld2v2", "【电影】流浪地球2 The Wandering Earth II 2023 4K 国语中字", st)
+    results.append(("根目录MoviePilot长名单文件", "skip_exists", d.action))
+
     # 8) 追剧：已转 1~5 集，第6集新链接(新 btih) → transfer（绝不被第5集误杀）
     c, r, clf, st, dd = build(cloud_files=[
         ("国产剧", "庆余年 第01集.mp4"), ("国产剧", "庆余年 第02集.mp4"),
@@ -224,6 +248,11 @@ def test_matching():
         # 拼音兜底：中文标题 vs 拼音文件夹名
         ("黑夜告白 2026 2160p 高清中字", "HeiYeGaoBai.2026.2160p.WEB-DL", True),
         ("黑夜告白", "HeiYeGaoBai2.2026", False),              # 续集数字不误吞
+        # MoviePilot/压制组自动下载器长文件名：{tmdb} 标签/[S01-S02]/体积尾巴应剥净
+        ("白夜追凶 全30集 高清中字",
+         "白夜追凶 (2017){tv tmdb-73982}[S01-S02][2160p][HEVC][AAC][中字][2.0](67.7GB 61个文件)", True),
+        ("流浪地球2 4K 国语中字",
+         "流浪地球2 (2023){movie tmdb-1983}[4K HDR][HEVC][中字].mkv", True),
         # 注：纯中文标题 vs 英文原名（星际穿越 vs Interstellar）依赖中英译名映射，
         # 文本层匹配不到，属于后续 TMDB 集成的范畴，这里不设用例。
     ]
