@@ -127,13 +127,40 @@ _REGION_RULES: list[tuple[re.Pattern, str, int]] = [
     # 欧美
     (re.compile(r"英语|英文|美剧|英剧|欧美|英语中字|英文原声|usa|us\s*版|uk|hollywood|english|西班牙语|法语|德语|俄语|意大利语|好莱坞", re.I), REGION_WEST, 4),
     (re.compile(r"美国|英国|法国|德国|西班牙|意大利|俄罗斯|欧洲|加拿大|澳大利亚", re.I), REGION_WEST, 2),
-    # 华语
-    (re.compile(r"国语|普通话|中文|国配|中字|简体|简中|chs|cht|大陆|内地|国产|华语|中国|央视", re.I), REGION_CN, 4),
+    # 华语：拆成强弱两档。
+    # 「中字 / 简体 / 简中」说的是**字幕**语言，不是片子本身的产地——
+    # 外语片配中文字幕是常态，旧表把它和「国语」并列给 4 分，
+    # 结果 "奥本海默 英语中字" 里 cn(中字)=4 和 west(英语)=4 打平，
+    # 再被「先到先得」的平局规则判成华语。所以降到 2 分：
+    # 有「国语/普通话」这类音轨证据才给满分。
+    (re.compile(r"国语|普通话|国配|华语|国产|大陆|内地|央视|中文配音|国语配音", re.I), REGION_CN, 4),
+    (re.compile(r"中字|简体|简中|chs|cht|中文", re.I), REGION_CN, 2),
     # 其他地区
     (re.compile(r"泰语|泰剧|印度|越南|泰国|新加坡|马来西亚|印尼|菲律宾|土耳其|伊朗|阿拉伯", re.I), REGION_OTHER, 3),
     # 日本动漫特征词（番名/术语）。动漫标题常缺语言标签，靠它把日番从国产动漫里分出来。
     (_ANIME_JPKR, REGION_JPKR, 3),
 ]
+
+# 地区打分打平时按这个顺序裁决。
+# 两边都没更多线索时，英语系更可能是外语片（中文字幕不代表产地），
+# 所以 west 排在 cn 前面——旧实现靠 dict 插入顺序，等于「谁先被遍历到谁赢」，
+# 完全是碰运气，这就是「华语电影通通分到欧美电影」的根因之一。
+_REGION_PRIORITY = (REGION_WEST, REGION_JPKR, REGION_CN, REGION_OTHER)
+
+# 地区提示（region_hint）的权重：
+#   强提示 = 本地字典登记的地区 / TMDB 的 original_language，是权威数据，
+#            权重给到 5，压过标题里的语言标签（4）——
+#            "泰坦尼克号 Titanic 1997" 这种中文译名+英文原名的标题，
+#            只有强提示能救回来，否则会被「标题有中文」判成华语；
+#   弱提示 = 「原标题含中文」这类语言推断，只够在平局时帮一把。
+_HINT_WEIGHT_STRONG = 5
+_HINT_WEIGHT_WEAK = 2
+
+# 形态打平时按规则表顺序裁决：专有类型（纪录片/演唱会/综艺/动漫）优先于
+# 通用类型（剧集/电影）——和 _SPECIFIC_KIND_RULES 的编写顺序保持一致。
+_KIND_PRIORITY = tuple(
+    dict.fromkeys(t for _, t, _ in _SPECIFIC_KIND_RULES + _MOVIE_RULES)
+)
 
 _CJK = re.compile(r"[\u4e00-\u9fff]")
 _NOISE = re.compile(r"\s+")
@@ -218,24 +245,32 @@ class Classifier:
         self.region_rules = list(_REGION_RULES) + list(extra_region_rules or [])
 
     # ---------- 主入口 ----------
-    def classify(self, title: str, extra: str = "", region_hint: str = "") -> ClassifyResult:
+    def classify(self, title: str, extra: str = "", region_hint: str = "",
+                 region_hint_strong: bool = False) -> ClassifyResult:
         """判定分类。
 
         :param title:     原始频道标题（保留栏目前缀、语言标签、英文原名——
                           这些是地区判定的真实信号，绝不能先剥掉）
         :param extra:     补充文本，通常是 ident 产出的规范中文名 info.folder
-        :param region_hint: 地区提示，由 ident 根据 core 语言特征推断（如 core 含中文→"cn"）。
-                            非空时直接采信，跳过原始标题的语言兜底推断。
+        :param region_hint: 地区提示（cn / jpkr / west / other）
+        :param region_hint_strong: 提示是否来自权威数据（本地字典登记表 /
+                          TMDB 的 original_language）。强提示权重压过标题标签。
 
-        地区判定优先级（高 → 低）：
-          1. 显式语言/地区标签：粤语/日语/韩语/英语/国语/美国/东京…（权重 4）
-          2. ident region_hint：core 含中文 → 直接判华语（权重 4，最高）
-          3. 频道栏目前缀里的地区词：日韩剧/欧美电影/国产剧…（权重 2）
-          4. 原标题语言推断：几乎无中文→欧美；中文为主→华语（权重 2）
+        地区判定按**打分制**，最后取最高分；打平时按 _REGION_PRIORITY 裁决：
+          1. ident 强地区提示（字典登记表 / TMDB original_language）  权重 5
+          2. 显式音轨/地区标签：粤语、日语、韩语、英语、国语…         权重 4
+          3. 字幕语言标签：中字 / 简体 / 简中（弱证据，不代表产地）   权重 2
+          4. ident 弱地区提示（原标题含中文 → 华语）                  权重 2
+          5. 频道栏目前缀里的地区词：日韩剧 / 欧美电影 / 国产剧…      权重 2
+          6. 原标题语言兜底：几乎无中文→欧美；中文为主→华语          权重 2
 
-        ⚠️ 历史 bug：纯英文标题的港片（如 "A Chinese Odyssey"）被兜底判成欧美电影，
-        因为核心虽已翻译成中文，但原始标题英文占比高。region_hint 解决了这个问题：
-        core 含中文就直接标记为华语，不再受原始标题语言干扰。
+        ⚠️ 历史 bug 一：旧实现把「中字」和「国语」并列当成华语强证据，
+        于是 "奥本海默 英语中字" 里 cn 和 west 各拿 4 分打平，
+        再被「dict 谁先插入谁赢」的平局规则判成华语。
+        ⚠️ 历史 bug 二：反过来，"流浪地球2 … 国语英语双语字幕" 同样打平，
+        这次是 west 先插入，于是华语片被判成欧美电影——
+        用户看到的「华语电影通通分到欧美电影」就是这么来的。
+        现在两处都修了：字幕语言降权 + 平局显式裁决 + 权威地区提示压过标签。
         """
         text = f"{title or ''} {extra or ''}"[:600]
         if not text.strip():
@@ -245,9 +280,17 @@ class Classifier:
         kind, kind_score, kind_sig = self._score(self.kind_rules, text)
         if not kind:
             kind, kind_score, kind_sig = self._score(self.movie_rules, text)
-        region, region_score, region_sig = self._score(self.region_rules, text)
 
+        region_scores, region_sig = self._score_detail(self.region_rules, text)
         signals = list(kind_sig) + list(region_sig)
+        # 地区提示直接加进打分表参与竞争，而不是像旧实现那样只在「无人得分」时才用。
+        # 只有参与竞争，才能在「国语+英语」这类打平的标题上把比分拉开。
+        if region_hint:
+            w = _HINT_WEIGHT_STRONG if region_hint_strong else _HINT_WEIGHT_WEAK
+            region_scores[region_hint] = region_scores.get(region_hint, 0) + w
+            tag = "片名库/TMDB" if region_hint_strong else "原标题语言推断"
+            signals.append(f"{tag}→{REGION_NAMES.get(region_hint, region_hint)}")
+        region, region_score = self._best(region_scores, _REGION_PRIORITY)
 
         # 形态兜底：没抓到明确信号时，用季集标记 / 年份推断
         if not kind or kind_score == 0:
@@ -261,31 +304,27 @@ class Classifier:
                 kind, kind_score = KIND_MOVIE, 1
                 signals.append("兜底:无明确信号→按电影处理")
 
-        # 地区兜底：显式语言标签没命中时，依次退到「ident hint → 栏目前缀」→「原标题语言」
+        # 地区兜底：显式信号一个都没得分时，依次退到「栏目前缀」→「原标题语言」。
+        # （region_hint 已在上面加进打分表，这里不再重复处理）
         if not region or region_score == 0:
-            # ident 已根据 core 语言特征推断出地区提示，直接采信
-            if region_hint:
-                region, region_score = region_hint, 4
-                signals.append(f"core含中文→{REGION_NAMES.get(region_hint, region_hint)}")
+            prefix = self._prefix_region(title)
+            if prefix:
+                region, region_score = prefix, 2
+                signals.append(f"栏目前缀→{REGION_NAMES.get(prefix, prefix)}")
             else:
-                prefix = self._prefix_region(title)
-                if prefix:
-                    region, region_score = prefix, 2
-                    signals.append(f"栏目前缀→{REGION_NAMES.get(prefix, prefix)}")
+                # 中文占比只看原始标题（剥掉栏目前缀）。绝不能用 text——
+                # 它含已翻译成中文的 folder，会让所有外语片译名都判成华语。
+                base = _LEADING_CATEGORY.sub("", title or "").strip() or (title or "")
+                ratio = _cjk_ratio(base)
+                if ratio >= 0.25:
+                    region, region_score = REGION_CN, 2
+                    signals.append(f"兜底:原标题以中文为主({ratio:.0%})→华语")
+                elif ratio <= 0.05:
+                    region, region_score = REGION_WEST, 2
+                    signals.append(f"兜底:原标题几乎无中文({ratio:.0%})→欧美")
                 else:
-                    # 中文占比只看原始标题（剥掉栏目前缀）。绝不能用 text——
-                    # 它含已翻译成中文的 folder，会让所有外语片译名都判成华语。
-                    base = _LEADING_CATEGORY.sub("", title or "").strip() or (title or "")
-                    ratio = _cjk_ratio(base)
-                    if ratio >= 0.25:
-                        region, region_score = REGION_CN, 2
-                        signals.append(f"兜底:原标题以中文为主({ratio:.0%})→华语")
-                    elif ratio <= 0.05:
-                        region, region_score = REGION_WEST, 2
-                        signals.append(f"兜底:原标题几乎无中文({ratio:.0%})→欧美")
-                    else:
-                        region, region_score = REGION_OTHER, 1
-                        signals.append(f"兜底:原标题中英混排({ratio:.0%})→其他")
+                    region, region_score = REGION_OTHER, 1
+                    signals.append(f"兜底:原标题中英混排({ratio:.0%})→其他")
 
         category = self._to_category(kind, region)
         # 置信度：两套打分归一化后取平均，上限 1
@@ -309,7 +348,8 @@ class Classifier:
                 return region
         return ""
 
-    def _score(self, rules, text: str) -> tuple[str, int, list[str]]:
+    def _score_detail(self, rules, text: str) -> tuple[dict[str, int], list[str]]:
+        """按规则表打分，返回 (分数表, 命中信号)。"""
         scores: dict[str, int] = {}
         signals: list[str] = []
         for pat, target, weight in rules:
@@ -319,10 +359,35 @@ class Classifier:
                 hit = (m.group(0) or "").strip()
                 if hit and len(hit) < 30:
                     signals.append(f"{hit}→{target}")
+        return scores, signals
+
+    @staticmethod
+    def _best(scores: dict[str, int], priority: tuple[str, ...] = ()) -> tuple[str, int]:
+        """取最高分。
+
+        打平时按 priority 顺序裁决。旧实现写的是
+        ``max(scores.items(), key=lambda kv: kv[1])``，
+        平局时返回 **dict 里第一个**最大值，也就是「哪条规则先被遍历到谁赢」——
+        这既不可控也不可读，是分类乱判的直接原因。
+        """
         if not scores:
-            return "", 0, []
-        best = max(scores.items(), key=lambda kv: kv[1])
-        return best[0], best[1], signals
+            return "", 0
+
+        def rank(item: tuple[str, int]) -> tuple[int, int]:
+            key, val = item
+            try:
+                p = priority.index(key)
+            except ValueError:
+                p = len(priority)
+            return (-val, p)
+
+        key, val = min(scores.items(), key=rank)
+        return key, val
+
+    def _score(self, rules, text: str) -> tuple[str, int, list[str]]:
+        scores, signals = self._score_detail(rules, text)
+        key, val = self._best(scores, _KIND_PRIORITY)
+        return key, val, signals
 
     def _to_category(self, kind: str, region: str) -> str:
         name = self.mapping.get((kind, region))

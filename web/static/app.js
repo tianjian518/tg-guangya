@@ -133,15 +133,15 @@ views.tasks = async function () {
     catch (e) { $("#task-body").innerHTML = `<div class="empty">读取失败：${esc(e.message)}</div>`; return; }
     const ts = data.tasks || [];
     if (!ts.length) { $("#task-body").innerHTML = `<div class="empty">暂无离线下载任务</div>`; return; }
-    $("#task-body").innerHTML = `<table><thead><tr><th>名称</th><th>状态</th><th>进度</th><th>大小</th><th>信息</th></tr></thead><tbody>
+    $("#task-body").innerHTML = `<table class="cards"><thead><tr><th>名称</th><th>状态</th><th>进度</th><th>大小</th><th>信息</th></tr></thead><tbody>
       ${ts.map((t) => {
         const color = t.status === 2 ? "ok" : t.status === 3 || t.status === 5 ? "err" : t.status === 4 ? "warn" : "dim";
         return `<tr>
-          <td>${esc(t.name || "(未知)")}</td>
-          <td><span class="badge ${color}">${esc(t.status_text)}</span></td>
-          <td style="min-width:140px"><div class="bar"><i style="width:${t.progress}%"></i></div><span class="pill">${t.progress}%</span></td>
-          <td class="muted">${fmtSize(t.size)}</td>
-          <td class="muted">${esc(t.message || "")}</td>
+          <td data-label="名称">${esc(t.name || "(未知)")}</td>
+          <td data-label="状态"><span class="badge ${color}">${esc(t.status_text)}</span></td>
+          <td data-label="进度" style="min-width:140px"><div class="bar"><i style="width:${t.progress}%"></i></div><span class="pill">${t.progress}%</span></td>
+          <td data-label="大小" class="muted">${fmtSize(t.size)}</td>
+          <td data-label="信息" class="muted">${esc(t.message || "")}</td>
         </tr>`;
       }).join("")}
     </tbody></table>`;
@@ -235,14 +235,14 @@ views.history = async function () {
       const m = { submitted: "ok", upgraded: "ok", skipped: "dim", failed: "err" };
       return `<span class="badge ${m[s] || "dim"}">${esc(s)}</span>`;
     };
-    $("#h-body").innerHTML = `<table><thead><tr><th>标题</th><th>频道</th><th>分类</th><th>状态</th><th>原因</th><th>时间</th></tr></thead><tbody>
+    $("#h-body").innerHTML = `<table class="cards"><thead><tr><th>标题</th><th>频道</th><th>分类</th><th>状态</th><th>原因</th><th>时间</th></tr></thead><tbody>
       ${items.map((r) => `<tr>
-        <td>${esc(r.title || "(无标题)")}</td>
-        <td class="muted">${esc(r.channel || "")}</td>
-        <td class="muted">${esc(r.category || "")}</td>
-        <td>${badge(r.status)}</td>
-        <td class="muted">${esc(r.reason || "")}</td>
-        <td class="muted">${esc(r.updated_text || "")}</td>
+        <td data-label="标题">${esc(r.title || "(无标题)")}</td>
+        <td data-label="频道" class="muted">${esc(r.channel || "")}</td>
+        <td data-label="分类" class="muted">${esc(r.category || "")}</td>
+        <td data-label="状态">${badge(r.status)}</td>
+        <td data-label="原因" class="muted">${esc(r.reason || "")}</td>
+        <td data-label="时间" class="muted">${esc(r.updated_text || "")}</td>
       </tr>`).join("")}
     </tbody></table>`;
   };
@@ -429,10 +429,12 @@ async function renderTab() {
 
       <h3 style="margin-top:18px">分类目录对照表</h3>
       <p class="hint">想改目录名（比如把「国产剧」改成「华语剧集」）直接编辑即可；也可以加行自定义。</p>
-      <table id="og-table">
-        <thead><tr><th>内容形态</th><th>地区</th><th>转存到子目录</th><th></th></tr></thead>
-        <tbody>${(O.mapping || []).map(row).join("")}</tbody>
-      </table>
+      <div class="table-wrap">
+        <table id="og-table">
+          <thead><tr><th>内容形态</th><th>地区</th><th>转存到子目录</th><th></th></tr></thead>
+          <tbody>${(O.mapping || []).map(row).join("")}</tbody>
+        </table>
+      </div>
       <div class="row" style="margin-top:8px">
         <button class="btn ghost" id="og-add">+ 添加一行</button>
         <button class="btn primary" id="og-save">保存自动分类设置</button>
