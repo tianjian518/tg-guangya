@@ -1,0 +1,36 @@
+name: Verify Magnet Channels
+
+# 一次性体检：在 GitHub runner（网络不受限）上抓 t.me/s/<频道> 网页，
+# 统计各候选频道真实磁力产出。结果打印到日志。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["seeds/candidates_verify.txt"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -q requests PyYAML
+
+      - name: Verify channels
+        id: verify
+        run: |
+          CHS=$(grep -v '^#' seeds/candidates_verify.txt | grep -v '^$' | tr '\n' ' ')
+          echo "候选频道: $CHS"
+          python3 verify_channels.py --channels $CHS --pages 2 --delay 0.3 2>&1 | tee /tmp/verify_result.txt
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-result
+          path: /tmp/verify_result.txt
