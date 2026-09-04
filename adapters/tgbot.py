@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 log = logging.getLogger("tgbot")
 
@@ -34,6 +34,8 @@ HELP_TEXT = """🤖 *光鸭转存助手*
 *命令*
 /status — 离线任务进度
 /stats — 转存统计
+/s `关键词` — 全网搜磁力（点按钮直接转存）
+/saveall `关键词` — 搜到就整批转存
 /pause — 暂停轮询
 /resume — 恢复轮询
 /channels — 当前监听的频道
@@ -82,6 +84,7 @@ class TgBot:
         on_add_channel: Optional[Callable[[str], str]] = None,
         on_del_channel: Optional[Callable[[str], str]] = None,
         on_find: Optional[Callable[[str], str]] = None,
+        on_search: Optional[Callable[[str, int], Tuple[List[Dict[str, Any]], str]]] = None,
     ) -> None:
         self.token = (token or "").strip()
         self.admin_ids = {int(i) for i in (admin_ids or []) if int(i)}
@@ -96,6 +99,7 @@ class TgBot:
         self._on_add_channel = on_add_channel
         self._on_del_channel = on_del_channel
         self._on_find = on_find
+        self._on_search = on_search
 
         self._bot = None          # telebot.TeleBot 实例（start 后才有）
         self._thread: Optional[threading.Thread] = None
@@ -103,6 +107,11 @@ class TgBot:
         self._paused = False
         self._admins_cache_lock = threading.Lock()
         self._last_notify = 0.0   # 推送节流时间戳
+
+        # /s 搜索结果缓存：slot id -> 结果 dict（callback 按钮点回来时取用）
+        self._search_slots: Dict[str, Dict[str, Any]] = {}
+        self._search_seq = 0
+        self._search_lock = threading.Lock()
 
     # ------------------------------------------------------------------ 权限
 
@@ -169,6 +178,104 @@ class TgBot:
                 self._bot.stop_polling()
         except Exception:  # noqa: BLE001 - 停止失败无需处理
             pass
+
+    # ------------------------------------------------------------ 全网磁力搜索
+
+    def _run_search(self, chat_id: int, kw: str, auto_all: bool) -> None:
+        """在后台线程执行搜索：/s 出列表+按钮；/saveall 直接整批提交。"""
+        try:
+            hits, errors = self._on_search(kw, 8)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("全网搜索异常: %s", exc)
+            self._send(chat_id, f"❌ 搜索出错了：{exc}")
+            return
+        hits = hits or []
+        if not hits:
+            tip = "换个说法试试？中文片建议用英文名或原名（`/s interstellar`）。"
+            if errors:
+                tip += f"\n引擎报错：{'；'.join(errors)[:120]}"
+            self._send(chat_id, f"没找到「{kw}」的磁力。\n{tip}")
+            return
+
+        if auto_all:
+            # 整批转存前 6 个（每个都走同一条过滤/去重/转存流水线）
+            ok = 0
+            for h in hits[:6]:
+                try:
+                    self._on_submit(f"{h.get('title', '')}\n{h.get('magnet', '')}", chat_id)
+                    ok += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("批量转存单条失败: %s", exc)
+            self._send(chat_id, f"🚚 已提交 {ok} 条离线下载（结果稍后逐条推送）。")
+            return
+        self._render_search_result(chat_id, kw, hits)
+
+    def _render_search_result(self, chat_id: int, kw: str, hits: List[Dict[str, Any]]) -> None:
+        try:
+            from telebot import types
+        except ImportError:
+            self._send(chat_id, "机器人组件缺失，无法显示按钮。")
+            return
+        shown = hits[:6]
+        lines = [f"🔎 「{kw}」磁力结果（按做种人数）"]
+        mark = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣")
+        for i, h in enumerate(shown):
+            t = h.get("title") or "未命名"
+            size = h.get("size_text") or "-"
+            seeds = h.get("seeders") or 0
+            lines.append(f"{mark[i]} {t[:90]}\n    大小 {size} · 做种 {seeds}")
+        with self._search_lock:
+            rows: List[Any] = []
+            for i in range(len(shown)):
+                self._search_seq += 1
+                slot = f"s{self._search_seq}"
+                self._search_slots[slot] = shown[i]
+                rows.append(types.InlineKeyboardButton(
+                    f"⬇️ 存{i + 1}", callback_data=f"g:{slot}"))
+            # 每行放 3 个按钮，最多 2 行
+            keyboard = [rows[i:i + 3] for i in range(0, len(rows), 3)]
+        markup = types.InlineKeyboardMarkup(keyboard)
+        lines.append("点【存N】即转存；全部搜到整批转存用 /saveall。")
+        if self._bot is None:
+            return
+        try:
+            self._bot.send_message(chat_id, "\n".join(lines),
+                                   parse_mode=None, disable_web_page_preview=True,
+                                   reply_markup=markup)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("发送搜索结果失败: %s", exc)
+
+    def _handle_callback(self, c) -> None:
+        """行内按钮回调：把对应磁力提交离线下载。"""
+        try:
+            uid = (c.from_user.id if c.from_user else 0) or 0
+            if not self.allowed(uid):
+                self._safe_answer(c, "⛔ 无权限")
+                return
+            data = c.data or ""
+            if not data.startswith("g:"):
+                self._safe_answer(c, "未知操作")
+                return
+            with self._search_lock:
+                hit = self._search_slots.pop(data[2:], None)
+            if hit is None:
+                self._safe_answer(c, "结果已过期，重新 /s 一下")
+                return
+            self._safe_answer(c, "收到，开始提交…")
+            text = f"{hit.get('title', '')}\n{hit.get('magnet', '')}"
+            if self._on_submit is not None:
+                reply = self._on_submit(text, c.message.chat.id)
+                self._send(c.message.chat.id, reply)
+        except Exception as exc:  # noqa: BLE001 - 回调异常不能拖垮轮询
+            log.warning("回调处理异常: %s", exc)
+
+    def _safe_answer(self, c, text: str) -> None:
+        if self._bot is None:
+            return
+        try:
+            self._bot.answer_callback_query(c.id, text)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("应答回调失败: %s", exc)
 
     # ------------------------------------------------------------------ 发送
 
@@ -276,6 +383,30 @@ class TgBot:
                 self._send(message.chat.id, "暂不支持搜索")
                 return
             self._send(message.chat.id, self._on_find(parts[1].strip()))
+
+        @bot.message_handler(commands=["s", "search", "saveall"])
+        def _search_cmd(message):
+            if not self.allowed(message.from_user.id if message.from_user else 0):
+                return self._deny(message.chat.id)
+            if self._on_search is None:
+                self._send(message.chat.id, "未启用全网磁力搜索（配置里把 bot.search_enabled 打开并重启监听）")
+                return
+            parts = (message.text or "").split(maxsplit=1)
+            kw = (parts[1] if len(parts) > 1 else "").strip()
+            if not kw:
+                self._send(message.chat.id, "用法：`/s 关键词`\n搜磁力引擎的种子名，"
+                                            "中文片建议用英文名/原名（如 `/s interstellar`）。\n"
+                                            "想搜到就整批转存用 `/saveall 关键词`。")
+                return
+            auto = message.text.strip().lower().startswith("/saveall")
+            self._send(message.chat.id, ("🚚 正在全网搜「%s」并整批转存…" if auto
+                                         else "🔍 正在全网搜「%s」…（几秒）") % kw)
+            threading.Thread(target=self._run_search, args=(message.chat.id, kw, auto),
+                             daemon=True, name="bot-search").start()
+
+        @bot.callback_query_handler(func=lambda c: True)
+        def _on_callback(c):
+            self._handle_callback(c)
 
         @bot.message_handler(func=lambda m: True, content_types=["text"])
         def _text(message):
