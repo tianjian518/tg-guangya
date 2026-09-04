@@ -55,6 +55,13 @@ def fake_get(url, headers=None, proxies=None, timeout=12):
     return FakeResp(SAMPLE_ROWS)
 
 
+def fake_tr_get(url, headers=None, proxies=None, timeout=6):
+    """按 URL 分流：翻译端点回翻译结果，apibay 端点回样例搜索行。"""
+    if "mymemory.translated.net" in url:
+        return FakeResp({"responseData": {"translatedText": "Interstellar"}})
+    return FakeResp(SAMPLE_ROWS)
+
+
 class MagnetSearchTest(unittest.TestCase):
 
     def test_apibay_parse_and_rank(self):
@@ -77,6 +84,38 @@ class MagnetSearchTest(unittest.TestCase):
             hits, errs = magnet_search.search_all("interstellar", engines=["apibay"], limit=2)
         self.assertEqual(len(hits), 2)
         self.assertEqual(errs, [])
+
+    def test_translate_only_when_cjk(self):
+        # 纯英文/数字关键词不触发翻译
+        magnet_search._TRANS_CACHE.clear()
+        self.assertEqual(magnet_search.translate_cn_keyword("interstellar 2014"),
+                         "interstellar 2014")
+        # 中文关键词走翻译（mock 端点返回 Interstellar），并缓存
+        with mock.patch("core.magnet_search.requests.get",
+                        side_effect=fake_tr_get) as m:
+            got = magnet_search.translate_cn_keyword("星际穿越")
+            self.assertEqual(got, "Interstellar")
+            # 缓存命中，不再发请求
+            got2 = magnet_search.translate_cn_keyword("星际穿越")
+            self.assertEqual(got2, "Interstellar")
+        self.assertEqual(m.call_count, 1)
+
+    def test_search_all_translates_cn_keyword(self):
+        # search_all 收到中文关键词：先翻译成英文再打 apibay
+        # （用与缓存测试不同的词，确保真的走一次翻译请求）
+        seen = []
+        def collecting_get(url, headers=None, proxies=None, timeout=6):
+            seen.append(url)
+            if "mymemory.translated.net" in url:
+                return FakeResp({"responseData": {"translatedText": "Interstellar"}})
+            return FakeResp(SAMPLE_ROWS)
+        with mock.patch("core.magnet_search.requests.get", side_effect=collecting_get):
+            hits, errs = magnet_search.search_all("流浪地球", engines=["apibay"], limit=2)
+        self.assertEqual(len(hits), 2)
+        self.assertEqual(errs, [])
+        # 两次请求：一次翻译端点 + 一次 apibay（英文关键词）
+        self.assertTrue(any("mymemory.translated.net" in u for u in seen))
+        self.assertTrue(any("apibay.org" in u and "q=Interstellar" in u for u in seen))
 
     def test_unknown_engine_error(self):
         hits, errs = magnet_search.search_all("x", engines=["nope"])
