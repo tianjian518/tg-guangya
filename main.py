@@ -486,6 +486,20 @@ def start_bot(cfg: AppConfig, config_path: str, store: Store, client: GuangyaCli
             lines.append(f"{icon} {(r.title or '未命名')[:38]}{cat}")
         return "\n".join(lines)
 
+    def _search(kw: str, limit: int = 8):
+        """全网磁力搜索（海盗湾 apibay API）。返回 (payload, 错误摘要)。"""
+        from core import magnet_search
+        if not cfg.bot.search_enabled:
+            return [], "全网磁力搜索已在配置里关闭（bot.search_enabled=false）。"
+        try:
+            hits, errors = magnet_search.search_all(
+                kw, engines=cfg.bot.search_engines or ["apibay"], limit=max(1, int(limit)),
+                proxy=cfg.bot.proxy or cfg.source.proxy)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("全网磁力搜索异常: %s", exc)
+            return [], f"搜索出错：{exc}"
+        return magnet_search.to_payload(hits), "；".join(errors)
+
     bot = TgBot(
         token=b.token,
         admin_ids=b.admin_ids,
@@ -499,6 +513,7 @@ def start_bot(cfg: AppConfig, config_path: str, store: Store, client: GuangyaCli
         on_add_channel=_add,
         on_del_channel=_del,
         on_find=_find,
+        on_search=_search,
     )
     # 转存结果推送给管理员（与控制台通知并行，互不影响）
     if b.notify:
