@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.1.1（2026-09-04）
+
+- **TG 机器人新增全网磁力搜索**：`/s 关键词` 调用磁力搜索引擎（海盗湾 apibay 公开 API）
+  实时搜种子，返回做种人数排序的前 6 条，每行带【存N】按钮**点击即一键转存**；`/saveall 关键词`
+  搜到就整批转存。再也不用干等频道更新，想看的片搜一下就有。
+- 新模块 `core/magnet_search.py`：多引擎可扩展（当前引擎 `apibay`），统一 `SearchHit`、
+  结果去重、按做种人数排序；搜索与频道监听共用同一条网络代理配置（`bot.proxy` 或 `sources.proxy`）。
+- 配置新增 `bot.search_enabled` / `bot.search_engines`，Web 面板「TG 机器人」页可开关；
+  引擎域名在本机被 DNS 污染，需把 `apibay.org` 真实 IP 写进 `/etc/hosts`（模块头注释说明）。
+- 单测：`tests/test_magnet_search.py`（不联网，mock 响应验证解析/去重/排序/配置读写）。
+
 ## v1.1.0（2026-09-04）
 
 - **新增 TG 机器人遥控**（`adapters/tgbot.py`，可选，装 `pyTelegramBotAPI` 后在配置 `bot.enabled=true` 开启）：
