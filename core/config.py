@@ -87,6 +87,17 @@ class OrganizeConfig:
 
 
 @dataclass
+class TmdbConfig:
+    """TMDB（themoviedb.org）API Key。
+
+    用途：片名智能识别的「字典」——中文名查 TMDB 拿英文原名/续集序号，
+    解决「中文标题 vs 英文原名（星际穿越 vs Interstellar）、流浪地球 vs 流浪地球2」
+    这类纯文本匹配不中的去重误判。这里只负责存储，填好后后续去重对比会逐步启用。
+    """
+    api_key: str = ""
+
+
+@dataclass
 class DedupConfig:
     """两级去重：本地记录 + 云端复查。
 
@@ -109,6 +120,7 @@ class AppConfig:
     filter: FilterConfig = field(default_factory=FilterConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     bot: BotConfig = field(default_factory=BotConfig)
+    tmdb: TmdbConfig = field(default_factory=TmdbConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     organize: OrganizeConfig = field(default_factory=OrganizeConfig)
@@ -198,6 +210,8 @@ class AppConfig:
             cache_ttl=float(dd.get("cache_ttl", 300.0)),
             upgrade=bool(dd.get("upgrade", False)),
         )
+        tm = raw.get("tmdb") or {}
+        cfg.tmdb = TmdbConfig(api_key=str(tm.get("api_key", "")).strip())
         return cfg
 
     def add_channels(self, new_channels: list[str], path: str) -> int:
@@ -273,6 +287,9 @@ class AppConfig:
                 "allow_anyone": self.bot.allow_anyone,
                 "search_enabled": self.bot.search_enabled,
                 "search_engines": list(self.bot.search_engines),
+            },
+            "tmdb": {
+                "api_key": self.tmdb.api_key,
             },
             "output": {
                 "parent_id": self.output.parent_id,
@@ -398,3 +415,6 @@ class AppConfig:
             self.bot.search_engines = [
                 str(x).strip() for x in bo["search_engines"] if str(x).strip() in ("apibay",)
             ]
+        tm = s.get("tmdb") or {}
+        if "api_key" in tm:
+            self.tmdb.api_key = str(tm["api_key"]).strip()
