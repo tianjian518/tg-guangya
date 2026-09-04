@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # ---------- 版本号（单一来源，改这一处即可） ----------
-__version__ = "1.2.3"
+__version__ = "1.3.0"
 
 import argparse
 import base64
