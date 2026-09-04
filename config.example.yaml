@@ -78,6 +78,12 @@ bot:
   search_enabled: true            # /s 全网磁力搜索（引擎 apibay=海盗湾公开API；运行机需把 apibay.org 真实IP写进 /etc/hosts，详见 core/magnet_search.py）
   search_engines: [apibay]        # 可同时启用多个，未来扩展
 
+# ===== TMDB（片名智能识别，可选）=====
+# 填上 Key 后，云端去重可识别「中文名↔英文原名」「第几部续集」，减少误判/漏判。
+# 申请：themoviedb.org 注册 → 设置 → API → 创建（免费）。Key 形如 1a2b3c...
+tmdb:
+  api_key: ""                     # TMDB API Key (v3 auth)，面板「系统设置 → TMDB」里填
+
 # ===== 频道自动发现 =====
 # 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，自动追加进本配置。
 # 也能单独跑 `python discover.py --config config.yaml` 做一次发现。
