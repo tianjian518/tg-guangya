@@ -63,6 +63,19 @@ telegram:
   api_hash: ""
   session: "tg_user.session"
 
+# ===== Telegram 机器人（可选，推荐开着）=====
+# 和上面的 telegram 段（userbot 账号监听）是两套东西，互不干扰：
+#   telegram 段 = 用「你的账号」登录去实时监听频道
+#   bot 段      = 用「机器人」在手机上控制程序 + 接收转存通知
+# 开启后对着机器人直接发磁力就能转存，还能 /status 查进度、/pause 暂停、/add 加频道。
+bot:
+  enabled: false                  # true = 开启（需要装 pyTelegramBotAPI）
+  token: ""                       # 找 @BotFather 申请，形如 123456:ABC-DEF...
+  admin_ids: []                   # 你的数字 ID，找 @userinfobot 问；例：[123456789]
+  notify: true                    # 转存/跳过/失败的结果是否推送给你
+  proxy: ""                       # 留空则沿用 sources.proxy
+  allow_anyone: false             # true = 谁都能用（不建议，等于开放你的网盘）
+
 # ===== 频道自动发现 =====
 # 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，自动追加进本配置。
 # 也能单独跑 `python discover.py --config config.yaml` 做一次发现。
