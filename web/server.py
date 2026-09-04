@@ -915,6 +915,18 @@ def logs(lines: int = 200):
 
 
 # ---------- 运行控制（启动/停止监听 worker）----------
+def _tail_worker_log(n: int = 15) -> str:
+    """取 worker 日志末尾几行，用于把「启动即崩」的原因直接回给面板。"""
+    try:
+        if not WORKER_LOG.exists():
+            return "（没有日志文件）"
+        with open(WORKER_LOG, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.read().splitlines()
+        return "\n".join(lines[-n:]) or "（日志为空）"
+    except Exception as exc:  # noqa: BLE001
+        return f"（读取日志失败: {exc}）"
+
+
 def _start_worker() -> bool:
     global _worker_proc
     if _worker_proc and _worker_proc.poll() is None:
@@ -923,10 +935,27 @@ def _start_worker() -> bool:
         raise HTTPException(status_code=401, detail="请先登录光鸭账号再启动监听")
     logf = open(WORKER_LOG, "ab", buffering=0)
     env = dict(os.environ)
-    _worker_proc = subprocess.Popen(
+    proc = subprocess.Popen(
         [sys.executable, str(BASE / "main.py"), "--config", str(CONFIG_PATH)],
         cwd=str(BASE), stdout=logf, stderr=logf, env=env,
     )
+    _worker_proc = proc
+    # Popen 是立即返回的：main.py 若在启动阶段就崩（import 错、配置错、
+    # 正则编译错等），进程会瞬间死掉，而面板照样显示"已启动"——用户看到的
+    # 就是"点了开始监控、然后没反应/过会发现根本没在跑"，错误信息全闷在日志里。
+    # 这里做一次短暂探活：进程已退出就把日志尾巴直接回传，省去翻日志。
+    deadline = time.time() + 2.5
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            break
+        time.sleep(0.2)
+    rc = proc.poll()
+    if rc is not None:
+        _worker_proc = None
+        raise HTTPException(
+            status_code=500,
+            detail=f"监听进程启动后立刻退出（退出码 {rc}）。日志末尾：\n{_tail_worker_log(15)}",
+        )
     return True
 
 
