@@ -1,32 +1,23 @@
-# 待验证的影视磁力候选频道（2026-09-04，来自 itgoyo/TelegramGroup、zhan2046/telegram-groups 等清单）
-# 由 .github/workflows/verify-channels.yml 在 GitHub runner 上实测磁力产出
+# 影视磁力候选精选（2026-09-04 第二轮，跑 verify_channels.py 翻 4 页）
+# 来源：list.tg 目录 + itgoyo/TelegramGroup + zhan2046 + 命名推断
+dianying4K
+Oscar4KMovies
+ysh365
+seedhub_cc
+nvpu_91
+remux4kfilm
+TGmovieTV
+imtvp
+soukuang
+movie8c
+NetflixFirst
+kinobluray
+My4KmovieClub
+Remux_21
+unicorn4kk
+zerodrama
 4k77
 4k83
-My4KmovieClub
-NetflixFans
-NetflixFirst
-Remux_2160P
-Remux_21
-SSKMJBTS
-TGmovieTV
-TaiwanAnime
-alist4k
-animemovies
-dianying4K
-dianying520
-doraemonmovielink
-gebi
-gebifilm
-hdtoday
-imtvp
-kuangfilm
-movie8c
-moviesnet
-netflix_52naifeitop
-netflix_bus
-netflixchina
-soukuang
-unicorn4kk
 yingshi6
 yunatv123
-zerodrama
+alist4k
