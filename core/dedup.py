@@ -1,23 +1,23 @@
-"""两级去重：本地记录 + 云端复查。
+"""三级去重：同磁力 → 内容账本 → 云端复查。
 
-为什么需要云端复查？
-- 一级（本地 hash 去重）只在「同一磁力链接」再次出现时有效。但同一部影视常被不同
-  频道以不同磁力（不同 btih）多次发布，hash 不同 → 一级去重失效，会被重复转存。
-- 光鸭网盘没有全局搜索接口，只能「在分类目录下列举文件、按片名匹配」来复查。
+思路（v1.3.0 起重构，核心变化是「不再靠猜文本，先建账本」）：
+  转存成功的同时，按 core/ident.py 的身份识别把「这部片/这集」记进本地 titles 账本。
+  下次无论哪个频道、哪种写法、换没换磁力 hash，只要内容是同一份，账本先命中 → 不重复落盘。
 
-决策流程（贴合用户诉求）：
-  1. 新链接出现 → 先看本地转存记录
-       - 从没转过（本地无记录）     → 进第 2 步云端复查
-       - 转过（本地有记录）         → 进第 2 步云端复查
-  2. 云端复查：在资源对应的分类目录下，按片名匹配是否已存在
-       - 云端已有同名资源           → 丢弃（用户保留着 / 不同磁力同一片）
-       - 云端没有（被用户删了）     → 重新转存一次
+决策流程：
+  1. 同磁力 hash 已处理（本地 magnets 表）      → 跳过（最便宜，刷屏防重）
+  2. 内容账本命中（titles 表，同一 folder key）→ 跳过（同片不同 hash / 不同写法重复推送）
+  3. 云端复查（防「不是本程序转的」历史资源）：
+       - 先精确：目录里存在同名 folder（我们自己落盘的标准名）→ 跳过/洗版
+       - 再模糊：names_match 兜底识别 MoviePilot/老版本等历史遗留命名
+  追剧/追番的保证：集数签名（SxxExx）进 folder key → 第6集永远不会被第5集顶掉；
+  同一集被不同磁力重复发布 → 账本同 key 直接命中丢弃。
 
-追剧 / 追番场景：同一部剧会分多集陆续发布（第1集、第2集……第N集），每一集都是
-不同的磁力链接（不同 btih）。
-  - 不同集必须用集数签名区分：第6集不能被第5集误杀，应当照常转存进同一分类目录。
-  - 同一集被不同磁力重复发布（第5集换了个链接）：仍按「同名同集」去重丢弃。
-实现见 episode_sig / names_match 中的集数感知规则。
+云端复查注意事项（老坑）：
+- 目录列表带缓存，条目含文件与文件夹（文件夹是磁力落盘主要形态，早期只比文件导致
+  副本泛滥）；
+- names_match 只对「不带集号」的目录做无集数匹配：带单集签名的新资源，遇到不带集号的
+  云端目录（可能是整包/整季）一律不判为同一集，宁可在首次重复时多转一份，绝不漏集。
 """
 from __future__ import annotations
 
@@ -37,9 +37,11 @@ except Exception:  # noqa: BLE001 - 可选依赖缺失时优雅降级
     lazy_pinyin = None
     _HAS_PINYIN = False
 
+from core.ident import analyze, norm as norm_name  # noqa: E402
+
 log = logging.getLogger(__name__)
 
-# ---------------- 片名归一化（提取「核心片名」用于匹配）----------------
+# ---------------- 片名归一化（提取「核心片名」用于模糊兜底匹配）----------------
 
 # 这些是「噪声后缀」，匹配时应当剥离，只保留可识别的片名主体
 _NOISE = re.compile(
@@ -72,16 +74,7 @@ _LEADING_TAG = re.compile(r"^\s*[\[【(（]?\s*(电影|剧集|动漫|动画|纪�
 
 
 def title_core(title: str) -> str:
-    """从标题/文件名里提取用于匹配的核心片名（小写、去噪声、去标点）。
-
-    除了 _NOISE 的常规噪声（年份/分辨率/编码/剧集进度），还要处理**自动下载器类
-    长文件名**（MoviePilot / 压制组发布名）里的结构性尾巴，否则这些残留会让
-    names_match 把「同一部片」判成不同片，云端复查失效、副本泛滥：
-      {tv tmdb-73982}   → 花括号 tag 块（含 tmdb 编号）
-      [S01-S02]         → 季范围（整剧包，非逐集）
-      [2.0]             → 纯数字方括号（音轨/比例说明）
-      (67.7GB 61个文件)   → 体积 + 文件数
-    """
+    """从标题/文件名里提取用于模糊兜底匹配的核心片名（小写、去噪声、去标点）。"""
     if not title:
         return ""
     s = _LEADING_TAG.sub("", title)   # 先去掉开头的【电影】这类类型标签
@@ -173,7 +166,6 @@ def episode_sig(title: str) -> str | None:
 
 
 # ---------------- 质量评分（洗版 / 版本升级）----------------
-# 给一条资源标题打「质量分」，分越高代表版本越好。洗版时用来判断「新链接是否比盘里已有的更好」。
 _RES_SCORE = [
     (2160, 120, re.compile(r"2160p|4k|uhd", re.I)),
     (1440, 90, re.compile(r"1440p", re.I)),
@@ -188,11 +180,7 @@ _BIT_SCORE = re.compile(r"\b10[- ]?bit\b", re.I)
 
 
 def quality_score(title: str) -> int:
-    """资源标题的质量分（越大越好）。用于洗版时判断「要不要替换盘里已有的旧版本」。
-
-    评分维度：分辨率（主导，4K=120 / 1080P=60 / 720P=35）+
-    编码（HEVC/REMUX +15）+ 音轨（Atmos/DTS-HD/TrueHD +10）+ HDR/DV（+8）+ 10bit（+4）。
-    """
+    """资源标题的质量分（越大越好）。用于洗版时判断「要不要替换盘里已有的旧版本」。"""
     if not title:
         return 0
     s = title
@@ -231,21 +219,23 @@ def _clean_containment(a: str, b: str) -> bool:
 def names_match(resource_title: str, existing_name: str) -> bool:
     """判断云端已有文件名 existing_name 是否与本资源 resource_title 指向同一部片子。
 
-    三套核心核依次匹配，兼顾：
+    只作「无单集签名资源（电影 / 多集包）」的模糊兜底匹配，三套核心核依次匹配：
     - 同语言同片（中文核/英文核精确相等，含续集数字）
     - 中英混合标题（一侧只有中文、另一侧只有英文时仍能命中）
     - 续集区分（流浪地球 vs 流浪地球2 不会误判为同一部）
-    - 追剧/追番（第6集不被第5集误杀）：两方都带集数签名且不同时，判为不同资源。
+    - 追剧关键：带集号的新资源 vs 不带集号的云端目录（可能是整包/整季）→ 一律不判为
+      同一集（宁可在首次重复时多转一份，也绝不漏集）；双方集号不同 → 不是同一集。
     """
     a = title_core(resource_title)
     b = title_core(existing_name)
     if not a or not b:
         return False
-    # 追剧/追番关键规则：两方都带集数签名（第X集 / SxxExx / EPxx）且**不同**时，
-    # 视为不同集（第6集不应被第5集误杀）。只有当集数签名一致（或有一方不标集数，
-    # 如整剧包「全30集」、未单独标集的电影）时，才继续用核心片名比对。
     ea, eb = episode_sig(resource_title), episode_sig(existing_name)
     if ea and eb and ea != eb:
+        return False
+    # 新资源带集号、对端目录不带集号：无法证明对端包含这一集（可能是整包），不判同片。
+    # 否则「云端已落整包《庆余年.2023》」会把新出的第6集误杀掉。
+    if ea and not eb:
         return False
     if _clean_containment(a, b):
         return True
@@ -256,10 +246,7 @@ def names_match(resource_title: str, existing_name: str) -> bool:
     la, lb = _latin_core(a), _latin_core(b)
     if la and lb and len(la) >= 3 and la == lb:
         return True
-    # 拼音兜底：一侧是中文（标题《黑夜告白》），另一侧是纯拉丁拼音名
-    # （云盘 HeiYeGaoBai.2026）——只把「含汉字段落」拼音化后做**精确**比对。
-    # 不做前缀/包含匹配：避免《黑夜告白》误吞《黑夜告白2》这类续集。
-    # title_core 已剥掉年份/分辨率/编码，正常云盘拼音名处理完应与拼音核完全一致。
+    # 拼音兜底：一侧是中文，另一侧是纯拉丁拼音名（黑夜告白 ↔ HeiYeGaoBai）。
     if _HAS_PINYIN and bool(_CJK.search(a)) != bool(_CJK.search(b)):
         for cn_side, lat_side in ((a, b), (b, a)):
             pa = _cn_pinyin(cn_side)
@@ -269,7 +256,7 @@ def names_match(resource_title: str, existing_name: str) -> bool:
     return False
 
 
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: E402
 
 
 @dataclass
@@ -282,8 +269,20 @@ class DedupDecision:
     replace_parent_id: str = ""  # 洗版：旧版本所在目录 fileId
 
 
+_VIDEO_EXT = re.compile(r"\.(mkv|mp4|avi|ts|rmvb|rm|iso|mov|wmv|flv|m2ts)$", re.I)
+
+
+def _entry_base(name: str) -> str:
+    """去掉条目名的文件扩展名（文件夹名通常没有）。"""
+    return _VIDEO_EXT.sub("", name or "")
+
+
+def _entry_norm(name: str) -> str:
+    return "".join(_ALNUM.findall(_entry_base(name).lower()))
+
+
 class CloudDedup:
-    """两级去重决策器。"""
+    """三级去重决策器（hash → 账本 → 云端）。"""
 
     def __init__(self, client, resolver, classifier,
                  cloud_check_new: bool = True, cache_ttl: float = 300.0,
@@ -297,10 +296,10 @@ class CloudDedup:
         self.upgrade = upgrade
         self._lock = threading.Lock()
         # parent_id -> (timestamp, [条目列表])，条目含 file_id/name/size/res_type/parent_id
-        self._dir_cache: dict[str, tuple[float, list[dict]]] = {}
+        self._dir_cache: dict = {}
 
     # ---------- 云端目录列表（带缓存，存完整条目）----------
-    def _list_dir_entries(self, parent_id: str) -> list[dict]:
+    def _list_dir_entries(self, parent_id: str) -> list:
         now = time.time()
         with self._lock:
             hit = self._dir_cache.get(parent_id)
@@ -308,7 +307,7 @@ class CloudDedup:
                 return hit[1]
         try:
             entries = self.client.list_dir(parent_id)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             log.warning("云端列举目录失败（%s），本次跳过云端查重", exc)
             return []
         for e in entries:
@@ -317,26 +316,12 @@ class CloudDedup:
             self._dir_cache[parent_id] = (now, entries)
         return entries
 
-    def _list_dir_names(self, parent_id: str) -> list[str]:
-        return [e["name"] for e in self._list_dir_entries(parent_id)
-                if int(e.get("res_type", 0)) != 2]
+    def _find_existing(self, category: str, info) -> dict | None:
+        """在云端找同名同内容条目。先精确（我们的标准 folder 名），再模糊（历史命名兜底）。
 
-    def _find_existing(self, category: str, title: str) -> dict | None:
-        """在资源可能出现的地方找「同名同款」的已有条目。
-
-        返回该条目 dict（含 file_id / name / parent_id），找不到返回 None。
-        集数感知由 names_match 保证：第6集不会命中第5集。
-
-        候选目录 = 分类目录 + 转存根目录（兜底）：
-        - 分类目录：本项目常规落盘处；
-        - 转存根目录：**必须也查**。旧版本/未分类/其它下载器（MoviePilot 等）可能把
-          资源平铺在根目录下，只查分类目录就会漏判「云端已有」→ 副本泛滥。
-
-        关键修复 2：**文件夹与散文件都要匹配**。磁力离线下载落盘大多是一个
-        「文件夹」（res_type==2，内有多文件），而旧实现只比对散文件
-        （res_type != 2）、把文件夹整体跳过，导致云端复查永远查不到已转存的
-        同名资源——重启/停开监控后，同一部片子换个磁力 hash 就会被当作
-        「云端没有」反复转存出副本。现在文件和文件夹都会进入比对。
+        返回条目 dict（含 file_id / name / parent_id），找不到返回 None。
+        候选目录 = 分类目录 + 转存根目录（旧版本/未分类/其它下载器可能平铺在根目录）。
+        文件夹与散文件都会进入比对（磁力离线落盘大多是一个文件夹）。
         """
         parents: list[str] = []
         if category and self.resolver.exists(category):
@@ -345,63 +330,111 @@ class CloudDedup:
                 parents.append(pid)
         if self.resolver.root_id and self.resolver.root_id not in parents:
             parents.append(self.resolver.root_id)  # 根目录兜底，防平铺资源漏判
+
+        # ① 精确：云端名字 == 我们这次的标准 folder（同内容不同源也应同名）
+        for parent_id in parents:
+            for e in self._list_dir_entries(parent_id):
+                name = e.get("name") or ""
+                if name and _entry_norm(name) == info.key:
+                    return e
+
+        # ② 模糊兜底（历史遗留命名）。单集 vs 无集号目录的误杀风险
+        #    已由 names_match 内部规则挡住：新资源带集号、对端目录不带集号 → 一律不判同集。
         for parent_id in parents:
             for e in self._list_dir_entries(parent_id):
                 name = e.get("name") or ""
                 if not name:
                     continue
-                if names_match(title, name):
+                if names_match(info.title, name):
                     return e
         return None
 
-    def cloud_has(self, category: str, title: str) -> bool:
-        """资源对应的分类目录（或根目录）里是否已存在同名片子。
-
-        传入原始标题（非剥离后的核心名），以便 names_match 内部做集数感知匹配。
-        """
-        return self._find_existing(category, title) is not None
-
     def decide(self, hash_: str, title: str, store) -> DedupDecision:
-        """综合本地记录与云端核查，给出去重决策。
+        """综合本地记录 + 内容账本 + 云端复查，给出去重决策。
 
-        store 需提供 get(hash_) -> 记录对象或 None，记录含 status 字段。
-
-        关键修正：同一磁力（btih）只要本地记过 done/submitted，就视为已处理、直接跳过，
-        绝不再转。云端复查仅作为「是否洗版替换」的辅助——其「查不到」**不得**触发重新转存。
-        原因：光鸭里文件的名字来自种子发布名（常是小写英文/拼音，如
-        HeiYeGaoBai.2026.2160p.WEB-DL.mp4），与电报标题（《黑夜告白》...）对不上时，
-        names_match 会误判「云端没有」，导致已存在的片子被反复复制（尤其停监控再开时）。
+        store 需提供 get / title_exists / title_has_episodes。
         """
-        cat = self.classifier.classify(title).category if self.organize_enabled else ""
+        cat = ""
+        try:
+            cat = self.classifier.classify(title).category if self.organize_enabled else ""
+        except Exception:  # noqa: BLE001
+            pass
+        info = analyze(title)
+
         rec = None
         try:
             rec = store.get(hash_)
-        except Exception:
+        except Exception:  # noqa: BLE001
             rec = None
-        local_done = rec is not None and (rec.status in ("done", "submitted"))
+        local_done = rec is not None and (rec.status in ("done", "submitted", "upgraded"))
 
-        # 同一磁力已转存过 → 直接跳过，不再转（云端复查只用于「洗版替换」判定）
-        if rec and local_done:
-            existing = None
-            if self.cloud_check_new:
+        # ① 同一磁力已处理过 → 直接跳过（云端仅用于洗版判定）
+        if local_done:
+            if self.cloud_check_new and self.upgrade:
                 try:
-                    existing = self._find_existing(cat, title)
-                except Exception:
+                    existing = self._find_existing(cat, info)
+                except Exception:  # noqa: BLE001
                     existing = None
-            if existing:
-                return self._decide_upgrade(existing, cat, title,
-                                            "本地已转存且云端仍存在")
+                if existing:
+                    return self._decide_upgrade(existing, cat, title,
+                                                "本地已转存且云端仍存在")
             return DedupDecision(
                 "skip_exists",
-                "本地已转存（云端复查未确认存在，按已处理跳过，防重复）",
-                cat, "")
+                "本地已转存过该磁力，跳过（防重复）", cat, "")
 
-        # 本地无记录（新磁力）：尽力做云端复查，命中同名则跳过/洗版
+        # ② 内容账本命中：同内容曾成功落盘（可能是不同磁力/不同写法）
+        ledger = None
+        try:
+            if bool(info.key) and hasattr(store, "title_get"):
+                ledger = store.title_get(info.key)
+        except Exception:  # noqa: BLE001
+            ledger = None
+        if ledger is not None:
+            if self.upgrade:
+                new_q = quality_score(title)
+                old_q = int(getattr(ledger, "quality", 0) or 0)
+                # 新版本质量更高才洗版：替换云端旧 folder（账本记得旧版本的真实质量，
+                # 新规范命名的文件夹名不含分辨率，不能拿文件夹名估旧质量）
+                if new_q > old_q:
+                    try:
+                        existing = self._find_existing(cat, info)
+                    except Exception:  # noqa: BLE001
+                        existing = None
+                    if existing:
+                        return DedupDecision(
+                            "upgrade",
+                            f"账本有旧版本（质量 {old_q}），新版本更优（{new_q}），洗版替换",
+                            cat, "",
+                            replace_file_id=existing.get("file_id", ""),
+                            replace_parent_id=existing.get("parent_id", ""),
+                        )
+            return DedupDecision(
+                "skip_exists",
+                "账本已记录该内容（曾成功落盘），跳过", cat, "")
+
+        # ②b 整包 vs 已按集收录：先逐集追过的剧，再来「全集包」多为重复 → 跳过
+        if info.is_pack and not info.sig:
+            try:
+                has_ep = store.title_has_episodes(norm_name(info.core)) \
+                    if hasattr(store, "title_has_episodes") else False
+            except Exception:  # noqa: BLE001
+                has_ep = False
+            if has_ep:
+                return DedupDecision(
+                    "skip_exists",
+                    "该剧已按集收录过，整集包多为重复，跳过（如含新增集可手动转存）", cat, "")
+
+        # ③ 云端复查（首见内容，防本程序之外的历史资源）
         if self.cloud_check_new:
-            existing = self._find_existing(cat, title)
+            try:
+                existing = self._find_existing(cat, info)
+            except Exception:  # noqa: BLE001
+                existing = None
             if existing:
-                return self._decide_upgrade(existing, cat, title,
-                                            "云端已存在同名资源（可能是不同磁力的同一片子）")
+                if self.upgrade:
+                    return self._decide_upgrade(existing, cat, title,
+                                                "云端已存在同名资源")
+                return DedupDecision("skip_exists", "云端已有同名资源，跳过", cat, "")
         return DedupDecision("transfer", "新资源，转存", cat, "")
 
     def _decide_upgrade(self, existing: dict, cat: str, title: str, base_reason: str) -> DedupDecision:
