@@ -15,3 +15,7 @@ guessit>=3.7
 
 # 可选：userbot 实时监听模式（sources.type=userbot 时才需要）
 telethon>=1.30
+
+# 可选：Telegram 机器人（bot.enabled=true 时才需要）
+# 用于手机上端命令控制（/status /pause /add 频道）与转存结果推送
+pyTelegramBotAPI>=4.14
