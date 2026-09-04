@@ -256,7 +256,13 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
         """返回 (目标目录 fileId, 分类名)。未开启自动分类则用统一目录。"""
         if classifier is None or resolver is None:
             return parent_id, ""
-        cr = classifier.classify(text)
+        # 与 dedup 判准入时用同一套输入（原始标题 + 规范中文名），
+        # 否则会出现「按欧美电影准入、却落到华语电影目录」的两处打架。
+        try:
+            extra = analyze(text).folder
+        except Exception:  # noqa: BLE001 - 命名失败不影响分类，退回只用原标题
+            extra = ""
+        cr = classifier.classify(text, extra=extra)
         target, path = resolver.resolve(cr.category)
         log.info("分类: %s → %s（%s/%s，置信度 %.0f%%）",
                  text[:34], path or "根目录", cr.kind_name, cr.region_name,
@@ -309,7 +315,6 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 cat = d.category
             else:
                 is_upgrade = False
-                cat = classifier.classify(msg.text).category if classifier else ""
 
             if not store.seen(h):
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
