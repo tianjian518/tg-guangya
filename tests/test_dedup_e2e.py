@@ -9,11 +9,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 BASE = Path(__file__).resolve().parent.parent
 
 from core.guangya import GuangyaClient
-from core.store import Store, MagnetRecord
+from core.store import Store, MagnetRecord, TitleRecord
 from core.config import AppConfig
 from core.classifier import Classifier
 from core.organizer import CategoryResolver
 from core.dedup import CloudDedup, title_core, names_match, quality_score
+from core.ident import analyze as ident_analyze, norm as ident_norm
 
 
 class FakeGuangya:
@@ -94,6 +95,23 @@ def build(cfg_overrides=None, cloud_files=None, cloud_dirs=None,
                        organize_enabled=cfg.organize.enabled,
                        upgrade=upgrade)
     return client, resolver, classifier, store, dedup
+
+
+def add_ledger(store, title, category="", quality=None):
+    """模拟一次成功落盘：按身份识别把内容写进账本。"""
+    info = ident_analyze(title)
+    store.add_title(TitleRecord(
+        norm_key=info.key,
+        norm_core=ident_norm(info.core),
+        sig=info.sig,
+        is_pack=info.is_pack,
+        year=info.year,
+        title=title[:200],
+        folder=info.folder,
+        category=category or "",
+        quality=quality if quality is not None else quality_score(title),
+    ))
+    return info
 
 
 def test_cases():
@@ -222,6 +240,55 @@ def test_cases():
     d = dd.decide("hash_1080b", "流浪地球2 2023 1080p 国语中字", st)
     results.append(("洗版/同质量不替换", "skip_exists", d.action))
 
+    # 21) 【账本核心】同片不同磁力：第一集曾成功落盘（账本有 s01e06），
+    #     另一频道/另一磁力再发同集、云端此刻为空 → 账本命中 skip（不再依赖云盘猜）
+    c, r, clf, st, dd = build()
+    add_ledger(st, "庆余年 第06集 1080p 国语中字", "国产剧")
+    d = dd.decide("hash_ep06_ledger", "庆余年 第6集 2160p 中字", st)
+    results.append(("账本/同集不同磁力", "skip_exists", d.action))
+
+    # 22) 【追剧核心】账本只有 第5集，频道新推 第6集（新磁力）→ transfer
+    #     （集数签名进账本 key：第6集永远不会被第5集的记录误杀）
+    c, r, clf, st, dd = build()
+    add_ledger(st, "庆余年 第05集 1080p", "国产剧")
+    d = dd.decide("hash_ep06_new", "庆余年 第06集 1080p 国语中字", st)
+    results.append(("账本/第6集不被第5集误杀", "transfer", d.action))
+
+    # 23) 【防误杀】云端已有整包目录「庆余年.2023」（无集号），新推 第6集 → transfer
+    #     （旧逻辑会把「整包目录」当「已含第6集」→ 误杀；现在带集号资源不匹配无集号目录）
+    c, r, clf, st, dd = build(cloud_dirs=[("国产剧", "庆余年.2023")])
+    d = dd.decide("hash_ep06_packdir", "庆余年 第06集 1080p 国语中字", st)
+    results.append(("云端整包目录不误杀新集", "transfer", d.action))
+
+    # 24) 【追剧完整包】账本已有按集记录（第1~5集），频道再推「全30集」整包 → skip
+    #     （逐集追过就别再被整包重复落盘；如整包含新增集可手动转存）
+    c, r, clf, st, dd = build()
+    for i in range(1, 6):
+        add_ledger(st, f"庆余年 第0{i}集 1080p", "国产剧")
+    d = dd.decide("hash_fullpack", "庆余年 全30集 高清中字", st)
+    results.append(("整包/已按集收录则跳过", "skip_exists", d.action))
+
+    # 25) 【电影账本】《流浪地球2》曾转存成功，另一频道再推同片不同磁力 → 账本命中 skip
+    c, r, clf, st, dd = build()
+    add_ledger(st, "【电影】流浪地球2 The Wandering Earth II 2023 4K 国语中字", "华语电影")
+    d = dd.decide("hash_ld2_other", "流浪地球2 2023 1080P 国语中字", st)
+    results.append(("账本/电影同片不同磁力", "skip_exists", d.action))
+
+    # 26) 【洗版防误伤】账本已记录 1080P 旧版，再推同质量 1080P → 不触发洗版，直接 skip
+    #     （新规范命名的云端文件夹名不含分辨率，旧质量只看账本记录的标题质量）
+    c, r, clf, st, dd = build(upgrade=True)
+    add_ledger(st, "流浪地球2 2023 1080P 国语中字", "华语电影")
+    d = dd.decide("hash_same_q", "流浪地球2 2023 1080p 国语中字", st)
+    results.append(("洗版/账本同质量不再重复洗版", "skip_exists", d.action))
+
+    # 27) 【洗版正向】账本旧版 1080P(60)，新推 2160P(120)，云端能找到旧 folder → upgrade 替换
+    c, r, clf, st, dd = build(upgrade=True, cloud_dirs=[("华语电影", "流浪地球2.2023")])
+    add_ledger(st, "流浪地球2 2023 1080P 国语中字", "华语电影")
+    d = dd.decide("hash_4k", "流浪地球2 2023 4K 2160p 国语中字", st)
+    results.append(("洗版/新质量更高则替换", "upgrade", d.action))
+    if d.action == "upgrade":
+        results.append(("洗版/携带待删旧文件id", "有", "有" if d.replace_file_id else "无"))
+
     ok = 0
     for name, exp, got in results:
         hit = "OK " if exp == got else "BAD"
@@ -237,7 +304,9 @@ def test_matching():
         ("流浪地球2 2023 4K 国语中字", "流浪地球2.2023.1080p.BluRay.mkv", True),
         ("奥本海默 Oppenheimer 2023", "Oppenheimer.2023.1080p.BluRay.mkv", True),
         ("繁花 更新至18集 1080P 国语中字", "繁花.2023.1080p.mkv", True),
-        ("鬼灭之刃 柱训练篇 第01集", "鬼灭之刃.柱训练篇.1080p.mkv", True),
+        # 带集号的新资源 vs 不带集号的云端目录：无法证明对端已含这一集（可能是整包/
+        # 整季目录）→ 保守不判同片（宁首次重复多转一份，绝不漏集）。同集去重由账本兜底。
+        ("鬼灭之刃 柱训练篇 第01集", "鬼灭之刃.柱训练篇.1080p.mkv", False),
         ("庆余年 第06集 1080p", "庆余年 第05集.mp4", False),       # 不同集 → 不误判为同片（追剧核心）
         ("庆余年 第05集 1080p", "庆余年 第05集.mp4", True),        # 同集同名 → 去重
         ("庆余年 S01E06", "庆余年 第06集.mp4", True),              # SxxExx 与 第X集 等价
@@ -263,6 +332,38 @@ def test_matching():
         if got == exp: ok += 1
         print(f"  {hit} names_match({a!r}, {b!r}) = {got} (期望 {exp})")
     print(f"\n匹配单测: {ok}/{len(cases)} 通过")
+    return ok == len(cases)
+
+
+def test_ident():
+    """身份识别确定性：同内容不同写法 → 同一 folder/key；不同集/续集 → 不同 key。"""
+    from core.ident import analyze
+    print("\n=== 标题身份识别（账本 key 来源）===")
+    cases = [
+        # (两个等价写法, 是否同一内容)
+        ("庆余年 第06集 1080p 国语中字", "庆余年 第6集 2160p 中字", True),
+        ("庆余年 第06集", "庆余年 S01E06", True),
+        ("庆余年 第2季第3集 1080p", "庆余年 S02E03 2160p", True),
+        ("【电影】流浪地球2 2023 4K 国语中字", "流浪地球2 2023 1080P 中英", True),
+        ("黑夜告白 2026 2160p 高清中字", "黑夜告白 2026 WEB-DL", True),
+        ("庆余年 第05集 1080p", "庆余年 第06集 1080p", False),     # 不同集 → 不同账本 key
+        ("流浪地球 2023", "流浪地球2 2023", False),                 # 续集 → 不同 key
+        ("金刚 2005 1080p", "金刚 2023 4K", False),               # 翻拍（年份不同）→ 不同 key
+        ("狂飙 更新至第15集 1080p", "狂飙 更新至第18集 1080p", True),  # 追更包：都算《狂飙》整包
+        ("狂飙 全30集 高清", "狂飙 1-30集 高清", True),             # 全集包写法不同 → 同 key
+        ("白夜追凶 2017 全30集 高清中字",
+         "白夜追凶 (2017){tv tmdb-73982}[S01-S02][2160p][HEVC][AAC][中字][2.0](67.7GB 61个文件)", True),
+        # 中文标题夹带英文与否不影响 key（英文译名不稳定 → 中文为主时丢弃英文）
+        ("奥本海默 Oppenheimer 2023 BluRay 英语中字", "奥本海默 2023 4K 国语", True),
+    ]
+    ok = 0
+    for ta, tb, same in cases:
+        a, b = analyze(ta), analyze(tb)
+        got = (a.key == b.key)
+        hit = "OK " if got == same else "BAD"
+        if got == same: ok += 1
+        print(f"  {hit} {ta[:30]!r:<34} key={a.folder!r:<24} | {tb[:26]!r:<30} key={b.folder!r:<24} 同一={same}")
+    print(f"\n身份识别单测: {ok}/{len(cases)} 通过")
     return ok == len(cases)
 
 
@@ -292,6 +393,7 @@ def test_quality():
 if __name__ == "__main__":
     a = test_cases()
     b = test_matching()
+    i = test_ident()
     q = test_quality()
-    print("\n==== 结论:", "全部通过 ✅" if (a and b and q) else "存在失败 ❌")
-    sys.exit(0 if (a and b) else 1)
+    print("\n==== 结论:", "全部通过 ✅" if (a and b and i and q) else "存在失败 ❌")
+    sys.exit(0 if (a and b and i and q) else 1)
