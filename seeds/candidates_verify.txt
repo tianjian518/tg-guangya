@@ -1,5 +1,7 @@
-# 影视磁力候选精选（2026-09-04 第二轮，跑 verify_channels.py 翻 4 页）
-# 来源：list.tg 目录 + itgoyo/TelegramGroup + zhan2046 + 命名推断
+# 影视磁力候选精选（2026-09-04 第三轮）
+# 来源：list.tg / TGNAV / 搜索结果确认
+oscar_4kmovies
+yingsgi
 dianying4K
 Oscar4KMovies
 ysh365
