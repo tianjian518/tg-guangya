@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # ---------- 版本号（单一来源，改这一处即可） ----------
-__version__ = "1.0.16"
+__version__ = "1.2.3"
 
 import argparse
 import base64
@@ -454,6 +454,9 @@ def get_settings():
             "search_enabled": cfg.bot.search_enabled,
             "search_engines": list(cfg.bot.search_engines),
         },
+        "tmdb": {
+            "api_key": cfg.tmdb.api_key,
+        },
     }
 
 
@@ -462,6 +465,38 @@ def put_settings(body: dict):
     cfg.apply_settings(body)
     cfg.save(str(CONFIG_PATH))
     return {"ok": True}
+
+
+@app.post("/api/tmdb/test")
+def test_tmdb(body: dict = None):
+    """验证 TMDB API Key 是否有效：请求一次 configuration 接口。
+
+    返回 {"ok": True} 表示 key 可用；否则返回带原因的 ok=False。
+    """
+    import urllib.parse
+    import urllib.request
+    from urllib.error import HTTPError
+    key = (body or {}).get("api_key") or cfg.tmdb.api_key
+    key = str(key).strip()
+    if not key:
+        return {"ok": False, "message": "请先填写 API Key"}
+    url = "https://api.themoviedb.org/3/configuration?api_key=" + urllib.parse.quote(key)
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "tg-guangya/1.2",
+            "Accept": "application/json",
+        })
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            code = resp.status
+            if code == 200:
+                return {"ok": True, "message": "连接成功，Key 有效"}
+            return {"ok": False, "message": "HTTP " + str(code)}
+    except HTTPError as e:
+        if e.code == 401:
+            return {"ok": False, "message": "Key 无效（401），请检查是否填错"}
+        return {"ok": False, "message": "HTTP " + str(e.code)}
+    except Exception as e:
+        return {"ok": False, "message": "连接失败：" + str(e)[:120]}
 
 
 @app.post("/api/channels/prune")
