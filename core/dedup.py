@@ -56,6 +56,14 @@ _NOISE = re.compile(
     r"|[\[\]【】()（）\.\-_~]"
 )
 
+# 自动下载器长文件名的结构性尾巴（title_core 里在 _NOISE 之前剥离）
+_TAG_BRACE = re.compile(r"\{[^{}]*\}")                                        # {tv tmdb-73982}
+_EPISODE_RANGE = re.compile(r"(?i)\bs\d{1,2}\s*[-–—~]\s*s?\d{1,2}\b")        # S01-S02（整剧包，非逐集）
+_NUM_BRACKET = re.compile(r"\[\s*\d+(?:\.\d+)?\s*\]")                          # [2.0]
+_SIZE_BLOCK = re.compile(r"\(\s*\d+(?:\.\d+)?\s*(?:[kmgt]i?b)?[^()]{0,40}\)", re.I)  # (67.7GB 61个文件)
+_SIZE_TOKEN = re.compile(r"(?i)\b\d+(?:\.\d+)?\s*[kmgt]i?b\b")                # 67.7GB（无括号兜底）
+_FILE_COUNT = re.compile(r"\d+\s*个(?:文件|视频|资源)")                         # 61个文件
+
 _CJK = re.compile(r"[一-鿿]")
 _ALNUM = re.compile(r"[a-z0-9一-鿿]")
 
@@ -64,11 +72,26 @@ _LEADING_TAG = re.compile(r"^\s*[\[【(（]?\s*(电影|剧集|动漫|动画|纪�
 
 
 def title_core(title: str) -> str:
-    """从标题/文件名里提取用于匹配的核心片名（小写、去噪声、去标点）。"""
+    """从标题/文件名里提取用于匹配的核心片名（小写、去噪声、去标点）。
+
+    除了 _NOISE 的常规噪声（年份/分辨率/编码/剧集进度），还要处理**自动下载器类
+    长文件名**（MoviePilot / 压制组发布名）里的结构性尾巴，否则这些残留会让
+    names_match 把「同一部片」判成不同片，云端复查失效、副本泛滥：
+      {tv tmdb-73982}   → 花括号 tag 块（含 tmdb 编号）
+      [S01-S02]         → 季范围（整剧包，非逐集）
+      [2.0]             → 纯数字方括号（音轨/比例说明）
+      (67.7GB 61个文件)   → 体积 + 文件数
+    """
     if not title:
         return ""
     s = _LEADING_TAG.sub("", title)   # 先去掉开头的【电影】这类类型标签
+    s = _TAG_BRACE.sub(" ", s)         # {tv tmdb-73982} 整块剥（含内部字母数字）
+    s = _EPISODE_RANGE.sub(" ", s)     # S01-S02 整剧包范围
+    s = _NUM_BRACKET.sub(" ", s)       # [2.0] 纯数字方括号
+    s = _SIZE_BLOCK.sub(" ", s)        # (67.7GB 61个文件) 体积括号块
     s = _NOISE.sub(" ", s)
+    s = _SIZE_TOKEN.sub(" ", s)        # 无括号的体积 token（兜底）
+    s = _FILE_COUNT.sub(" ", s)        # 61个文件（兜底）
     s = s.lower()
     # 只保留中文与字母数字，去掉所有空格/标点
     s = "".join(_ALNUM.findall(s))
@@ -299,29 +322,36 @@ class CloudDedup:
                 if int(e.get("res_type", 0)) != 2]
 
     def _find_existing(self, category: str, title: str) -> dict | None:
-        """在资源对应的分类目录（或根目录）里找「同名同款」的已有条目。
+        """在资源可能出现的地方找「同名同款」的已有条目。
 
         返回该条目 dict（含 file_id / name / parent_id），找不到返回 None。
         集数感知由 names_match 保证：第6集不会命中第5集。
 
-        关键修复：**文件夹与散文件都要匹配**。磁力离线下载落盘大多是一个
+        候选目录 = 分类目录 + 转存根目录（兜底）：
+        - 分类目录：本项目常规落盘处；
+        - 转存根目录：**必须也查**。旧版本/未分类/其它下载器（MoviePilot 等）可能把
+          资源平铺在根目录下，只查分类目录就会漏判「云端已有」→ 副本泛滥。
+
+        关键修复 2：**文件夹与散文件都要匹配**。磁力离线下载落盘大多是一个
         「文件夹」（res_type==2，内有多文件），而旧实现只比对散文件
         （res_type != 2）、把文件夹整体跳过，导致云端复查永远查不到已转存的
         同名资源——重启/停开监控后，同一部片子换个磁力 hash 就会被当作
         「云端没有」反复转存出副本。现在文件和文件夹都会进入比对。
         """
+        parents: list[str] = []
         if category and self.resolver.exists(category):
-            parent_id, _ = self.resolver.resolve(category, create_missing=False)
-        else:
-            parent_id = self.resolver.root_id
-        if not parent_id:
-            return None
-        for e in self._list_dir_entries(parent_id):
-            name = e.get("name") or ""
-            if not name:
-                continue
-            if names_match(title, name):
-                return e
+            pid, _ = self.resolver.resolve(category, create_missing=False)
+            if pid:
+                parents.append(pid)
+        if self.resolver.root_id and self.resolver.root_id not in parents:
+            parents.append(self.resolver.root_id)  # 根目录兜底，防平铺资源漏判
+        for parent_id in parents:
+            for e in self._list_dir_entries(parent_id):
+                name = e.get("name") or ""
+                if not name:
+                    continue
+                if names_match(title, name):
+                    return e
         return None
 
     def cloud_has(self, category: str, title: str) -> bool:
