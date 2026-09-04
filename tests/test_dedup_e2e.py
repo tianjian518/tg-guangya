@@ -134,12 +134,18 @@ def test_cases():
     d = dd.decide("h_opp", "奥本海默 Oppenheimer 2023 BluRay 英语中字", st)
     results.append(("本地done/云端仍在", "skip_exists", d.action))
 
-    # 4) 本地记录 done + 云端被删 → 仍 skip（防副本设计：云端可能已被用户迁移/清理，
-    #    本地既已处理过就不再自动重转，否则容易制造副本。测试期望与实现对齐）
+    # 4) 本地记录 done + 云端被删 → 云盘为准：盘里没有 → 重新落盘 retransfer
+    #    （用户手动删/清理过盘里这份，重发同磁力应能再转回来）
     c, r, clf, st, dd = build()  # 云端无该文件
     st.add(MagnetRecord(hash="h_del", status="done", title="沙丘2 2024"))
     d = dd.decide("h_del", "沙丘2 Dune Part Two 2024 4K 国语中字", st)
-    results.append(("本地done/云端已删", "skip_exists", d.action))
+    results.append(("本地done/云端已删→重落盘", "retransfer", d.action))
+
+    # 4b) 本地 submitted（任务还在跑）+ 云端暂时还没有 → 继续等，不重复提交
+    c, r, clf, st, dd = build()
+    st.add(MagnetRecord(hash="h_pend", status="submitted", title="沙丘2 2024"))
+    d = dd.decide("h_pend", "沙丘2 Dune Part Two 2024 4K 国语中字", st)
+    results.append(("本地submitted/任务进行中", "skip_exists", d.action))
 
     # 5) 本地记录 failed（非 done）→ 当新资源，云端空 → transfer
     c, r, clf, st, dd = build()
@@ -240,12 +246,12 @@ def test_cases():
     d = dd.decide("hash_1080b", "流浪地球2 2023 1080p 国语中字", st)
     results.append(("洗版/同质量不替换", "skip_exists", d.action))
 
-    # 21) 【账本核心】同片不同磁力：第一集曾成功落盘（账本有 s01e06），
-    #     另一频道/另一磁力再发同集、云端此刻为空 → 账本命中 skip（不再依赖云盘猜）
-    c, r, clf, st, dd = build()
+    # 21) 【云端为准】同片不同磁力：云盘里已有该集 folder（规范名 庆余年.S01E06，
+    #     此前落盘形成）→ 已存放弃 skip（账本有没有记录都一样，判据是云盘）
+    c, r, clf, st, dd = build(cloud_dirs=[("国产剧", "庆余年.S01E06")])
     add_ledger(st, "庆余年 第06集 1080p 国语中字", "国产剧")
     d = dd.decide("hash_ep06_ledger", "庆余年 第6集 2160p 中字", st)
-    results.append(("账本/同集不同磁力", "skip_exists", d.action))
+    results.append(("已存/同集不同磁力", "skip_exists", d.action))
 
     # 22) 【追剧核心】账本只有 第5集，频道新推 第6集（新磁力）→ transfer
     #     （集数签名进账本 key：第6集永远不会被第5集的记录误杀）
@@ -268,15 +274,21 @@ def test_cases():
     d = dd.decide("hash_fullpack", "庆余年 全30集 高清中字", st)
     results.append(("整包/已按集收录则跳过", "skip_exists", d.action))
 
-    # 25) 【电影账本】《流浪地球2》曾转存成功，另一频道再推同片不同磁力 → 账本命中 skip
-    c, r, clf, st, dd = build()
+    # 25) 【云端为准】云盘已有《流浪地球2》规范 folder，另一频道再推同片不同磁力 → 已存放弃
+    c, r, clf, st, dd = build(cloud_dirs=[("华语电影", "流浪地球2.2023")])
     add_ledger(st, "【电影】流浪地球2 The Wandering Earth II 2023 4K 国语中字", "华语电影")
     d = dd.decide("hash_ld2_other", "流浪地球2 2023 1080P 国语中字", st)
-    results.append(("账本/电影同片不同磁力", "skip_exists", d.action))
+    results.append(("已存/电影同片不同磁力", "skip_exists", d.action))
+
+    # 25b) 【云盘为准】账本有记录但云端 folder 已被删 → 没存 → 重新落盘 transfer
+    c, r, clf, st, dd = build()
+    add_ledger(st, "【电影】流浪地球2 The Wandering Earth II 2023 4K 国语中字", "华语电影")
+    d = dd.decide("hash_ld2_gone", "流浪地球2 2023 1080P 国语中字", st)
+    results.append(("账本有/云盘已删则重落盘", "transfer", d.action))
 
     # 26) 【洗版防误伤】账本已记录 1080P 旧版，再推同质量 1080P → 不触发洗版，直接 skip
     #     （新规范命名的云端文件夹名不含分辨率，旧质量只看账本记录的标题质量）
-    c, r, clf, st, dd = build(upgrade=True)
+    c, r, clf, st, dd = build(upgrade=True, cloud_dirs=[("华语电影", "流浪地球2.2023")])
     add_ledger(st, "流浪地球2 2023 1080P 国语中字", "华语电影")
     d = dd.decide("hash_same_q", "流浪地球2 2023 1080p 国语中字", st)
     results.append(("洗版/账本同质量不再重复洗版", "skip_exists", d.action))
