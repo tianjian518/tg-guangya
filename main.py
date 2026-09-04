@@ -25,7 +25,7 @@ from adapters.web_scraper import WebScraper, link_key, extract_links
 from adapters.userbot import UserbotSource
 from adapters.tgbot import TgBot, BotMessage
 from core.guangya import GuangyaClient, GuangyaError, STATUS_TEXT
-from core.store import Store, MagnetRecord
+from core.store import Store, MagnetRecord, TitleRecord
 from core.matcher import KeywordFilter, parse_title
 from core.naming import build_cn_filename
 from core.notifier import Notifier
@@ -34,7 +34,8 @@ from core.discovery import ChannelDiscovery
 from core.data_dir import resolve_config_path, get_data_dir, resolve_rel
 from core.classifier import Classifier
 from core.organizer import CategoryResolver
-from core.dedup import CloudDedup
+from core.dedup import CloudDedup, quality_score
+from core.ident import analyze
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,6 +77,63 @@ def _norm(s: str) -> str:
     s = (s or "").strip().lower()
     base = s.rsplit(".", 1)[0] if "." in s else s
     return re.sub(r"[^0-9a-z一-鿿]", "", base)
+
+
+def _record_ledger(store: Store, text: str, category: str = "") -> None:
+    """把「已成功落盘的内容」登记进内容账本（titles 表）。
+
+    账本主键由标题的身份识别算出（同内容不同 hash/写法 → 同一 key），
+    之后再来同片直接命中跳过。写失败只告警，不影响主流程。
+    """
+    try:
+        if not text:
+            return
+        info = analyze(text)
+        if not info.key:
+            return
+        store.add_title(TitleRecord(
+            norm_key=info.key,
+            norm_core=_norm(info.core),
+            sig=info.sig,
+            is_pack=info.is_pack,
+            year=info.year,
+            title=text[:200],
+            folder=info.folder,
+            category=category or "",
+            quality=quality_score(text),
+        ))
+    except Exception as exc:  # noqa: BLE001 - 账本写入失败不能拖垮转存
+        log.warning("写入内容账本失败: %s", exc)
+
+
+def backfill_title_ledger(store: Store) -> int:
+    """升级到 v1.3 后回填账本：把历史已成功（done/upgraded）的转存按新规则登记。
+
+    否则老用户库里已转过的片，升级后遇到同片会被当新资源再转一份。
+    """
+    scanned = added = 0
+    for status in ("done", "upgraded"):
+        offset = 0
+        while True:
+            rows = store.history(limit=200, status=status, offset=offset)
+            if not rows:
+                break
+            for rec in rows:
+                if not rec.title:
+                    continue
+                before = store.title_count()
+                _record_ledger(store, rec.title, rec.category)
+                after = store.title_count()
+                scanned += 1
+                if after > before:
+                    added += 1
+            offset += len(rows)
+            if len(rows) < 200:
+                break
+    if scanned:
+        log.info("账本回填：扫描 %d 条历史转存，登记 %d 条内容（账本现有 %d 条）",
+                 scanned, added, store.title_count())
+    return added
 
 
 def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
@@ -254,6 +312,9 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
                 store.update(h, status=db_status,
                              task_id=task_id, category=category)
+                # 真正落盘成功 → 记内容账本（后续同片不同磁力也能认出来）
+                if final_status == "done":
+                    _record_ledger(store, msg.text, category)
                 parsed = parse_title(msg.text)
                 where = f"→ {category}" if category else ""
                 tag = "♻️ 洗版转存" if is_upgrade else "✅ 已转存"
@@ -303,6 +364,8 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
                     t = task_map[tid]
                     if t.status == GuangyaClient.STATUS_SUCCESS:
                         store.update(tid, status="done")
+                        # 提交时超时、实际在后台才完成的任务，落盘成功也要补记账本
+                        _record_ledger(store, rec.title or "", rec.category or "")
                         updated += 1
                         log.info("任务 %s 已完成", tid)
                     elif t.status in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
@@ -561,6 +624,11 @@ def main() -> None:
     cfg.storage_db = resolve_rel(data_dir, cfg.storage_db)
     cfg.telegram.session = resolve_rel(data_dir, cfg.telegram.session)
     store = Store(cfg.storage_db)
+    # 升级回填：老用户历史成功转存按新规则登记进账本，防止升级后被重复转存
+    try:
+        backfill_title_ledger(store)
+    except Exception as exc:  # noqa: BLE001 - 回填失败不阻塞启动
+        log.warning("账本回填失败（可稍后手动触发）: %s", exc)
     client = build_client(cfg, args.config)
 
     if not client.token:
