@@ -90,19 +90,27 @@ class MagnetSearchTest(unittest.TestCase):
         magnet_search._TRANS_CACHE.clear()
         self.assertEqual(magnet_search.translate_cn_keyword("interstellar 2014"),
                          "interstellar 2014")
-        # 中文关键词走翻译（mock 端点返回 Interstellar），并缓存
+        # 本地词典收录的中文片名：直接命中，完全不打网络
         with mock.patch("core.magnet_search.requests.get",
                         side_effect=fake_tr_get) as m:
-            got = magnet_search.translate_cn_keyword("星际穿越")
+            self.assertEqual(magnet_search.translate_cn_keyword("星际穿越"), "Interstellar")
+            self.assertEqual(m.call_count, 0)
+        # 本地词典没收录的中文词：走翻译端点（mock 返回 Interstellar），并缓存
+        magnet_search._TRANS_CACHE.clear()
+        with mock.patch("core.magnet_search.requests.get",
+                        side_effect=fake_tr_get) as m:
+            got = magnet_search.translate_cn_keyword("某部冷门华语片")
             self.assertEqual(got, "Interstellar")
             # 缓存命中，不再发请求
-            got2 = magnet_search.translate_cn_keyword("星际穿越")
+            got2 = magnet_search.translate_cn_keyword("某部冷门华语片")
             self.assertEqual(got2, "Interstellar")
         self.assertEqual(m.call_count, 1)
 
     def test_search_all_translates_cn_keyword(self):
-        # search_all 收到中文关键词：先翻译成英文再打 apibay
-        # （用与缓存测试不同的词，确保真的走一次翻译请求）
+        # search_all 收到中文关键词：先转成英文再打 apibay。
+        # 注意「流浪地球/星际穿越」已在本地词典里（不再走网络），
+        # 故这里用词典没收录的词，确保真的会走一次翻译请求。
+        magnet_search._TRANS_CACHE.clear()
         seen = []
         def collecting_get(url, headers=None, proxies=None, timeout=6):
             seen.append(url)
@@ -110,12 +118,28 @@ class MagnetSearchTest(unittest.TestCase):
                 return FakeResp({"responseData": {"translatedText": "Interstellar"}})
             return FakeResp(SAMPLE_ROWS)
         with mock.patch("core.magnet_search.requests.get", side_effect=collecting_get):
-            hits, errs = magnet_search.search_all("流浪地球", engines=["apibay"], limit=2)
+            hits, errs = magnet_search.search_all("某部冷门华语片", engines=["apibay"], limit=2)
         self.assertEqual(len(hits), 2)
         self.assertEqual(errs, [])
         # 两次请求：一次翻译端点 + 一次 apibay（英文关键词）
         self.assertTrue(any("mymemory.translated.net" in u for u in seen))
         self.assertTrue(any("apibay.org" in u and "q=Interstellar" in u for u in seen))
+
+    def test_local_dict_beats_network(self):
+        """本地词典优先：片名不走翻译 API（它对片名返回的噪声极大）。"""
+        magnet_search._TRANS_CACHE.clear()
+        seen = []
+        def collecting_get(url, headers=None, proxies=None, timeout=6):
+            seen.append(url)
+            return FakeResp(SAMPLE_ROWS)
+        with mock.patch("core.magnet_search.requests.get", side_effect=collecting_get):
+            hits, errs = magnet_search.search_all("流浪地球", engines=["apibay"], limit=2)
+        self.assertEqual(errs, [])
+        # 不打翻译端点
+        self.assertFalse(any("mymemory" in u for u in seen))
+        # 直接用本地词典里的英文原名去搜
+        self.assertTrue(any("The+Wandering+Earth" in u or "The%20Wandering%20Earth" in u
+                            for u in seen))
 
     def test_unknown_engine_error(self):
         hits, errs = magnet_search.search_all("x", engines=["nope"])
