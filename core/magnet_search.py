@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import threading
 import urllib.parse
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
@@ -31,6 +33,13 @@ SEARCH_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
              "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 APIRAY_ENDPOINT = "https://apibay.org/q.php"
+
+# 中文关键词自动翻译（apibay 收到中文 query 不搜索、只回全站热门榜，
+# 表现就是「每次搜出来都一样」。翻成英文后再搜才有效）。
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get"
+_TRANS_LOCK = threading.Lock()
+_TRANS_CACHE: dict = {}
 
 
 @dataclass
@@ -103,6 +112,44 @@ def search_apibay(keyword: str, limit: int = 10, proxy: str = "",
     return hits
 
 
+def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
+    """含中文的关键词先经免费翻译转英文，再喂给只吃英文的搜索引擎。
+
+    实测 apibay 收到中文 query 时不真正搜索，而是返回全站热门榜（固定几条），
+    表现就是「无论搜什么结果都一样」。中文片名翻成英文后命中率大幅提升
+    （星际穿越 → Interstellar、流浪地球 → Wandering Earth 均可用）。
+
+    翻译失败（网络/限流/无语料）时原样返回关键词，调用方自行兜底。
+    结果带进程内缓存：同一关键词不重复请求翻译。
+    """
+    if not _CJK_RE.search(keyword or ""):
+        return keyword
+    kw = (keyword or "").strip()
+    if not kw:
+        return kw
+    with _TRANS_LOCK:
+        cached = _TRANS_CACHE.get(kw)
+    if cached is not None:
+        return cached
+    url = "%s?q=%s&langpair=zh-CN|en" % (
+        MYMEMORY_ENDPOINT, urllib.parse.quote(kw))
+    out = ""
+    try:
+        r = requests.get(url, headers={"User-Agent": SEARCH_UA},
+                         timeout=timeout)
+        r.raise_for_status()
+        out = ((r.json() or {}).get("responseData") or {}).get("translatedText") or ""
+    except Exception as exc:  # noqa: BLE001 - 翻译失败不影响主流程
+        log.warning("中文关键词翻译失败（按原词搜索）: %s", exc)
+    clean = " ".join(re.sub(r"[^a-zA-Z0-9 ]+", " ", out).split())
+    final = clean or kw
+    with _TRANS_LOCK:
+        _TRANS_CACHE[kw] = final
+    if final != kw:
+        log.info("中文关键词 %r → 翻译 %r 再搜索", kw, final)
+    return final
+
+
 # 可扩展引擎表：加新源时实现同名函数并注册进来
 ENGINES = {
     "apibay": search_apibay,
@@ -116,6 +163,8 @@ def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8
     errors 里是各引擎失败的简要原因，供调用方提示用户。
     """
     engines = engines or ["apibay"]
+    # 搜索引擎（apibay）不支持中文：含中文关键词先翻译成英文再搜
+    kw = translate_cn_keyword(keyword)
     hits: List[SearchHit] = []
     seen = set()
     errors: List[str] = []
@@ -125,7 +174,7 @@ def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8
             errors.append("未知引擎 %r" % name)
             continue
         try:
-            got = fn(keyword, limit=limit * 2, proxy=proxy, timeout=timeout)
+            got = fn(kw, limit=limit * 2, proxy=proxy, timeout=timeout)
             for h in got:
                 if h.magnet not in seen:
                     seen.add(h.magnet)
