@@ -590,6 +590,7 @@ async function renderTab() {
       <label><input type="checkbox" id="bot-notify" ${B.notify !== false ? "checked" : ""} style="width:auto"> 转存结果推送给我</label>
       <label><input type="checkbox" id="bot-anyone" ${B.allow_anyone ? "checked" : ""} style="width:auto"> 允许所有人使用（不建议）</label>
       <p class="hint">勾上等于任何人都能往你的光鸭盘里塞东西，一般别开。</p>
+      <label style="margin-top:10px"><input type="checkbox" id="bot-search" ${B.search_enabled !== false ? "checked" : ""} style="width:auto"> 全网磁力搜索（/s 关键词，可直接点结果转存）</label>
       <label>代理（留空则沿用「频道配置」里的代理）</label>
       <input type="text" id="bot-proxy" placeholder="http://127.0.0.1:7890" value="${esc(B.proxy || "")}" />
       <button class="btn primary" id="bot-save" style="margin-top:12px">保存</button>
@@ -604,6 +605,7 @@ async function renderTab() {
         admin_ids: ids,
         notify: $("#bot-notify").checked,
         allow_anyone: $("#bot-anyone").checked,
+        search_enabled: $("#bot-search").checked,
         proxy: ($("#bot-proxy").value || "").trim(),
       };
       try {
