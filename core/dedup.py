@@ -398,15 +398,17 @@ class CloudDedup:
         - 做不到（无中文片名 / 只能进兜底类 / 整理被关闭）→ reject，放弃链接。
         store 需提供 get / title_has_episodes / title_get。
         """
+        info = analyze(title)
         cr = None
         cat = ""
         if self.organize_enabled:
             try:
-                cr = self.classifier.classify(title)
+                # 用已翻译的中文 folder 分类，而非原始英文标题（否则港片会被判成欧美）
+                classify_title = info.folder or title
+                cr = self.classifier.classify(classify_title)
                 cat = cr.category
             except Exception:  # noqa: BLE001
                 cr = None
-        info = analyze(title)
 
         rec = None
         try:
