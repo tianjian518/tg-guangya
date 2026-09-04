@@ -58,6 +58,8 @@ class BotConfig:
     notify: bool = True          # 转存/跳过的处理结果是否推送给管理员
     proxy: str = ""              # 留空则沿用 sources.proxy
     allow_anyone: bool = False   # True = 所有人可用（不建议，谁都能往你盘里塞）
+    search_enabled: bool = True  # /s 全网磁力搜索
+    search_engines: list[str] = field(default_factory=lambda: ["apibay"])  # apibay=海盗湾镜像API
 
 
 @dataclass
@@ -151,6 +153,7 @@ class AppConfig:
             session=str(tg.get("session", "tg_user.session")).strip(),
         )
         b = raw.get("bot") or {}
+        raw_engines = b.get("search_engines")
         cfg.bot = BotConfig(
             enabled=bool(b.get("enabled", False)),
             token=str(b.get("token", "")).strip(),
@@ -158,6 +161,10 @@ class AppConfig:
             notify=bool(b.get("notify", True)),
             proxy=str(b.get("proxy", "")).strip(),
             allow_anyone=bool(b.get("allow_anyone", False)),
+            search_enabled=bool(b.get("search_enabled", True)),
+            search_engines=(["apibay"] if raw_engines is None else
+                            [str(x).strip() for x in raw_engines
+                             if str(x).strip() in ("apibay",)]),
         )
         o = raw.get("output") or {}
         cfg.output = OutputConfig(
@@ -264,6 +271,8 @@ class AppConfig:
                 "notify": self.bot.notify,
                 "proxy": self.bot.proxy,
                 "allow_anyone": self.bot.allow_anyone,
+                "search_enabled": self.bot.search_enabled,
+                "search_engines": list(self.bot.search_engines),
             },
             "output": {
                 "parent_id": self.output.parent_id,
@@ -383,3 +392,9 @@ class AppConfig:
             self.bot.proxy = str(bo["proxy"]).strip()
         if "allow_anyone" in bo:
             self.bot.allow_anyone = bool(bo["allow_anyone"])
+        if "search_enabled" in bo:
+            self.bot.search_enabled = bool(bo["search_enabled"])
+        if "search_engines" in bo:
+            self.bot.search_engines = [
+                str(x).strip() for x in bo["search_engines"] if str(x).strip() in ("apibay",)
+            ]
