@@ -276,9 +276,18 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 notifier.send(f"⏭️ 跳过/{reason}: {msg.text[:60]}")
                 continue
 
-            # 两级去重：本地记录 → 云端复查
+            # 两级去重：本地记录 → 云端复查 → 中文规范准入
             if dedup is not None:
                 d = dedup.decide(h, msg.text, store)
+                if d.action == "reject":
+                    # 落盘准入失败：做不到中文规范命名/整理归类 → 放弃这个链接
+                    if not store.seen(h):
+                        store.add(MagnetRecord(hash=h, channel=msg.channel,
+                                               message_id=msg.message_id, title=msg.text[:120]))
+                    store.update(h, status="skipped", reason=d.reason, category=d.category)
+                    log.info("⛔ 放弃链接（%s）: %s", d.reason, msg.text[:50])
+                    notifier.send(f"⛔ 已放弃（无法中文规范命名/归类）: {msg.text[:60]}")
+                    continue
                 if d.action == "skip_exists":
                     if not store.seen(h):
                         store.add(MagnetRecord(hash=h, channel=msg.channel,
@@ -664,6 +673,7 @@ def main() -> None:
         cache_ttl=cfg.dedup.cache_ttl,
         organize_enabled=cfg.organize.enabled,
         upgrade=cfg.dedup.upgrade,
+        require_cn=cfg.dedup.require_cn,
     )
     log.info("转存去重已开启（云端复查=%s，结构=%s）",
              "开" if cfg.dedup.cloud_check_new else "关（仅本地 hash 去重）",
