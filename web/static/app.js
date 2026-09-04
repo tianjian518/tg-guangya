@@ -266,6 +266,7 @@ views.settings = async function () {
         <button data-t="organize">自动分类</button>
         <button data-t="runtime">运行参数</button>
         <button data-t="bot">TG 机器人</button>
+        <button data-t="tmdb">TMDB</button>
         <button data-t="notify">通知</button>
         <button data-t="backup">备份与还原</button>
         <button data-t="about">关于</button>
@@ -613,6 +614,43 @@ async function renderTab() {
         toast("已保存 TG 机器人设置", "ok");
         $("#bot-out").innerHTML = "✅ 已写入配置文件。<b>需重启监听</b>才会生效（概览页：停止监听 → 启动监听）。";
       } catch (e) { errToast(e); }
+    });
+  } else if (state.tab === "tmdb") {
+    const TM = S.tmdb || {};
+    body.innerHTML = `
+      <p class="hint">TMDB（themoviedb.org）是全球最大的免费影视资料库。填上 API Key 后，
+      系统认片会「更聪明」：<b>中文名 ↔ 英文原名</b>（如《星际穿越》= Interstellar）、
+      <b>续集序号</b>（《流浪地球》与《流浪地球2》）这些纯靠文字认不出的关系都能识别，
+      云端去重就不再误判。现在填好先存着，不会影响现有功能。</p>
+      <div class="card">
+        <h3>怎么申请</h3>
+        <p>1. 打开 <a href="https://www.themoviedb.org/signup" target="_blank" rel="noopener">themoviedb.org</a> 注册账号（免费）。</p>
+        <p>2. 登录后进 <b>设置 → API</b>，点「创建」，按提示填用途申请（个人使用、非商用即可，一般即时通过）。</p>
+        <p>3. 拿到的 <b>API Key（v3 auth）</b> 填到下面，点「测试」确认能用。</p>
+      </div>
+      <label style="margin-top:16px">TMDB API Key（v3 auth）</label>
+      <input type="text" id="tmdb-key" placeholder="形如 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d" value="${esc(TM.api_key || "")}" spellcheck="false" />
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="tmdb-save">保存</button>
+        <button class="btn" id="tmdb-test">🧪 测试连接</button>
+      </div>
+      <div id="tmdb-out" class="hint" style="margin-top:8px"></div>`;
+    $("#tmdb-save").addEventListener("click", async () => {
+      S.tmdb = S.tmdb || {};
+      S.tmdb.api_key = ($("#tmdb-key").value || "").trim();
+      try { await api("PUT", "/settings", S); toast("已保存 TMDB API Key", "ok"); }
+      catch (e) { errToast(e); }
+    });
+    $("#tmdb-test").addEventListener("click", async () => {
+      const key = ($("#tmdb-key").value || "").trim();
+      if (!key) { $("#tmdb-out").textContent = "请先填写 API Key 再测试。"; return; }
+      $("#tmdb-out").textContent = "测试中…";
+      try {
+        const r = await api("POST", "/tmdb/test", { api_key: key });
+        $("#tmdb-out").innerHTML = r.ok
+          ? `✅ ${esc(r.message || "连接成功")}`
+          : `❌ ${esc(r.message || "Key 不可用")}`;
+      } catch (e) { $("#tmdb-out").textContent = "测试失败：" + e.message; }
     });
   } else if (state.tab === "notify") {
     body.innerHTML = `
