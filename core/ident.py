@@ -30,11 +30,17 @@ from dataclasses import dataclass
 
 # ---------------- 标题里要剥离的噪声 ----------------
 
-# 开头的类型标签：【电影】 / [剧集] / （电影）/ 电影 流浪地球
+# 开头的类型标签：【电影】 / [剧集] / （电影）/ 电影 流浪地球 / 欧美电影: xxx
+# 注意：修饰词（最新/高清/4K 等）与地区词（欧美/华语/国产 等）均为可选，
+# 且「欧美电影」这类整体词必须列在「电影」之前（长的优先）。
 _LEADING_TAG = re.compile(
     r"^\s*[\[【(（]?\s*"
-    r"(电影|剧集|动漫|动画|纪录片|综艺|演唱会|短片|连续剧|网剧|电视剧|"
-    r"美剧|韩剧|日剧|港剧|台剧|国产剧|欧美剧|日韩剧)\s*[\]】)］]?\s*"
+    r"(?:最新|热门|经典|精品|推荐|高清|超清|蓝光|原盘|4k|8k|uhd|1080p|720p|2160p)?\s*"
+    r"(?:欧美电影|华语电影|国产电影|外语电影|亚洲电影|日本电影|韩国电影|港台电影|"
+    r"电影|剧集|动漫|动画|纪录片|综艺|演唱会|短片|连续剧|网剧|电视剧|"
+    r"美剧|韩剧|日剧|港剧|台剧|国产剧|欧美剧|日韩剧|港片|日影|韩影)"
+    r"\s*[\]】)）］]?\s*[:：|｜\-–—]?\s*",
+    re.I,
 )
 
 # 自动下载器 / 压制组长文件名的结构性尾巴（与 dedup.title_core 对齐）
@@ -56,8 +62,12 @@ _TECH = re.compile(
     r"|\b(blu[- ]?ray|bluray|bdrip|brrip|web[- ]?dl|webrip|webdl|remux|hdtv|hdrip|"
     r"dvdrip|dvdr|h264|h265|x264|x265|hevc|avc|mpeg|yuv420p)\b"
     r"|\b(remastered|restored|imax|hdr10?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
-    r"truehd|dts[- ]?hd|dts[- ]?x|ac3|aac|flac|lpcm|5\.1|7\.1|10bit|8bit)\b"
-    r"|dd5\.1|dts5\.1|eac3|e-\s*ac3|atmos|ma|mlp"
+    r"truehd|ac3|aac|flac|lpcm|5\.1|7\.1|10bit|8bit)\b"
+    # DTS 家族整体匹配（含可选 MA 后缀）。必须放在所有短分支之前：
+    # 若先被 dts[- ]?hd 吃掉，就会剩下孤立的 MA 粘进片名。
+    # 且绝不能退化成裸 ma —— 那会啃掉 Terminator/Batman/The Matrix 里的 "ma"。
+    r"|\bdts(?:[- ]?(?:x|hd(?:[- ]?ma)?|ma))?\b"
+    r"|dd5\.1|dts5\.1|eac3|e-\s*ac3|\batmos\b|\bmlp\b"
     r"|\.(mkv|mp4|avi|ts|rmvb|rm|iso|mov|wmv|flv|m2ts)(?=\s|$)"
 )
 
@@ -792,10 +802,17 @@ _NORM_PHRASES = [(k, v) for k, v in _EN_PHRASES.items()]
 
 def _try_tmdb_translate(core: str) -> str:
     """通过 TMDB API 查询英文片名的中文名（本地字典拿不到的兜底方案）。
-    只在 config.tmdb.api_key 已配置时生效，其他情况静默失败。"""
-    from core.config import AppConfig
-    from core.data_dir import resolve_config_path
-    cfg = AppConfig.load(str(resolve_config_path()))
+    只在 config.tmdb.api_key 已配置时生效，其他情况静默失败。
+
+    健壮性要求：本函数处在 analyze() 的兜底路径上，任何异常都必须就地吞掉
+    （import 失败 / 配置损坏 / 网络异常），绝不能向外冒泡——否则一条标题解析
+    失败就会中断整条转存流程。翻译不出来最多是保留英文原名，代价远小于崩流程。"""
+    try:
+        from core.config import AppConfig
+        from core.data_dir import resolve_config_path
+        cfg = AppConfig.load(str(resolve_config_path()))
+    except Exception:
+        return ""
     if not core or not cfg.tmdb.api_key:
         return ""
     # 剥掉年份和无关数字，取前 50 字符作为搜索词
