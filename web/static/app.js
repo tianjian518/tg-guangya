@@ -265,6 +265,7 @@ views.settings = async function () {
         <button data-t="filter">过滤规则</button>
         <button data-t="organize">自动分类</button>
         <button data-t="runtime">运行参数</button>
+        <button data-t="bot">TG 机器人</button>
         <button data-t="notify">通知</button>
         <button data-t="backup">备份与还原</button>
         <button data-t="about">关于</button>
@@ -567,6 +568,49 @@ async function renderTab() {
         S.sources.channels = r.channels || [];  // 同步前端，避免再次保存时把噪音频道写回
       } catch (e) { $("#rt-prune-out").textContent = "恢复失败：" + e.message; }
       finally { btn.disabled = false; }
+    });
+  } else if (state.tab === "bot") {
+    const B = S.bot || {};
+    body.innerHTML = `
+      <p class="hint">开启后，用手机上的 Telegram 就能直接控制程序：发个磁力链接立刻转存，
+      <code>/status</code> 查进度、<code>/pause</code> 暂停轮询、<code>/add 频道名</code> 加频道。
+      转存结果也会推送给你。</p>
+      <div class="card">
+        <h3>怎么申请</h3>
+        <p>1. 在 Telegram 里找 <code>@BotFather</code>，发 <code>/newbot</code>，按提示拿到 token（形如 <code>123456:ABC-DEF…</code>）。</p>
+        <p>2. 找 <code>@userinfobot</code> 发任意消息，拿到你自己的数字 ID，填进下面的管理员列表。</p>
+        <p>3. 保存后<b>重启监听</b>（概览页「停止监听 → 启动监听」）才会生效。</p>
+      </div>
+      <label style="margin-top:16px"><input type="checkbox" id="bot-enabled" ${B.enabled ? "checked" : ""} style="width:auto"> 启用 TG 机器人</label>
+      <label>Bot Token（@BotFather 处获取）</label>
+      <input type="text" id="bot-token" placeholder="123456:ABC-DEF..." value="${esc(B.token || "")}" />
+      <label>管理员数字 ID（多个用英文逗号分隔）</label>
+      <input type="text" id="bot-admins" placeholder="123456789, 987654321" value="${esc((B.admin_ids || []).join(", "))}" />
+      <p class="hint">留空则谁的命令都不执行（机器人只当摆设）。填了自己，就只有你能用。</p>
+      <label><input type="checkbox" id="bot-notify" ${B.notify !== false ? "checked" : ""} style="width:auto"> 转存结果推送给我</label>
+      <label><input type="checkbox" id="bot-anyone" ${B.allow_anyone ? "checked" : ""} style="width:auto"> 允许所有人使用（不建议）</label>
+      <p class="hint">勾上等于任何人都能往你的光鸭盘里塞东西，一般别开。</p>
+      <label>代理（留空则沿用「频道配置」里的代理）</label>
+      <input type="text" id="bot-proxy" placeholder="http://127.0.0.1:7890" value="${esc(B.proxy || "")}" />
+      <button class="btn primary" id="bot-save" style="margin-top:12px">保存</button>
+      <div id="bot-out" class="hint" style="margin-top:8px"></div>`;
+    $("#bot-save").addEventListener("click", async () => {
+      const rawIds = $("#bot-admins").value || "";
+      const ids = rawIds.split(/[,，\s]+/).map((x) => x.trim()).filter(Boolean)
+        .map((x) => Number(x)).filter((n) => Number.isFinite(n) && n !== 0);
+      S.bot = {
+        enabled: $("#bot-enabled").checked,
+        token: ($("#bot-token").value || "").trim(),
+        admin_ids: ids,
+        notify: $("#bot-notify").checked,
+        allow_anyone: $("#bot-anyone").checked,
+        proxy: ($("#bot-proxy").value || "").trim(),
+      };
+      try {
+        await api("PUT", "/settings", S);
+        toast("已保存 TG 机器人设置", "ok");
+        $("#bot-out").innerHTML = "✅ 已写入配置文件。<b>需重启监听</b>才会生效（概览页：停止监听 → 启动监听）。";
+      } catch (e) { errToast(e); }
     });
   } else if (state.tab === "notify") {
     body.innerHTML = `
