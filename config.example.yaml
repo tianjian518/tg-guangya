@@ -85,14 +85,17 @@ tmdb:
   api_key: ""                     # TMDB API Key (v3 auth)，面板「系统设置 → TMDB」里填
 
 # ===== 频道自动发现 =====
-# 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，自动追加进本配置。
-# 也能单独跑 `python discover.py --config config.yaml` 做一次发现。
+# 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，
+# 先扫 1 页验证是否有磁力（verify_threshold >= 1），有磁力才入库。
+# 也能单独跑 `python discover.py --config config.yaml --save` 手动触发一次。
 discovery:
   enabled: false                  # true = 开
   interval_hours: 24              # 发现间隔（小时）
-  seed_file: "seeds/channels_seed.txt"   # 本地种子（已内置一批影视频道）
+  verify_threshold: 1             # 新频道至少要有 N 条磁力才入库；0 = 不验证（老行为）
+  seed_file: "seeds/channels_seed.txt"   # 本地种子（已内置一批影视频道，不受上限限制）
   seed_urls:                      # 网络种子（最佳努力，可达才生效）
     - "https://raw.githubusercontent.com/zhan2046/telegram-groups/main/README.md"
+    - "https://raw.githubusercontent.com/TG-NAV/tg-nav.github.io/master/nav/channel.md"
 
 # ===== 其它 =====
 storage_db: "tg_guangya.db"       # 去重数据库
