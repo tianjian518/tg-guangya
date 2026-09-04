@@ -26,6 +26,17 @@ import re
 import threading
 import time
 
+# 拼音兜底（可选依赖）：光鸭落盘名常是种子发布名（英文/拼音，如 HeiYeGaoBai.2026），
+# 与频道中文标题《黑夜告白》对不上。装了 pypinyin 就能把中文侧拼音化再比对，
+# 大幅降低「云端复查误判没有同名 → 反复复制副本」的概率；没装则静默跳过该层。
+try:
+    from pypinyin import lazy_pinyin
+
+    _HAS_PINYIN = True
+except Exception:  # noqa: BLE001 - 可选依赖缺失时优雅降级
+    lazy_pinyin = None
+    _HAS_PINYIN = False
+
 log = logging.getLogger(__name__)
 
 # ---------------- 片名归一化（提取「核心片名」用于匹配）----------------
@@ -76,6 +87,8 @@ _REMAINDER_BAD = re.compile(r"[0-9a-zA-Z一-鿿]")
 _CJK_CORE = re.compile(r"[^一-鿿0-9]")
 # 英文核：只保留字母数字
 _LATIN_CORE = re.compile(r"[^a-z0-9]")
+# 汉字片段（用于取出一串中文转拼音）
+_CN_CHUNK = re.compile(r"[一-鿿]+")
 
 
 def _cjk_core(s: str) -> str:
@@ -84,6 +97,19 @@ def _cjk_core(s: str) -> str:
 
 def _latin_core(s: str) -> str:
     return _LATIN_CORE.sub("", s)
+
+
+def _cn_pinyin(s: str) -> str:
+    """取字符串里的中文字符，转成无声调小写拼音（黑夜告白 → heiyegaobai）。"""
+    if not _HAS_PINYIN:
+        return ""
+    segs = _CN_CHUNK.findall(s or "")
+    if not segs:
+        return ""
+    try:
+        return "".join(lazy_pinyin("".join(segs)))
+    except Exception:  # noqa: BLE001 - 转换失败当作无拼音
+        return ""
 
 
 # ---------------- 集数签名（追剧 / 追番）----------------
@@ -207,6 +233,16 @@ def names_match(resource_title: str, existing_name: str) -> bool:
     la, lb = _latin_core(a), _latin_core(b)
     if la and lb and len(la) >= 3 and la == lb:
         return True
+    # 拼音兜底：一侧是中文（标题《黑夜告白》），另一侧是纯拉丁拼音名
+    # （云盘 HeiYeGaoBai.2026）——只把「含汉字段落」拼音化后做**精确**比对。
+    # 不做前缀/包含匹配：避免《黑夜告白》误吞《黑夜告白2》这类续集。
+    # title_core 已剥掉年份/分辨率/编码，正常云盘拼音名处理完应与拼音核完全一致。
+    if _HAS_PINYIN and bool(_CJK.search(a)) != bool(_CJK.search(b)):
+        for cn_side, lat_side in ((a, b), (b, a)):
+            pa = _cn_pinyin(cn_side)
+            pl = _latin_core(lat_side)
+            if len(pa) >= 4 and pl and pl == pa:
+                return True
     return False
 
 
@@ -263,10 +299,16 @@ class CloudDedup:
                 if int(e.get("res_type", 0)) != 2]
 
     def _find_existing(self, category: str, title: str) -> dict | None:
-        """在资源对应的分类目录（或根目录）里找「同名同集」的已有文件条目。
+        """在资源对应的分类目录（或根目录）里找「同名同款」的已有条目。
 
         返回该条目 dict（含 file_id / name / parent_id），找不到返回 None。
         集数感知由 names_match 保证：第6集不会命中第5集。
+
+        关键修复：**文件夹与散文件都要匹配**。磁力离线下载落盘大多是一个
+        「文件夹」（res_type==2，内有多文件），而旧实现只比对散文件
+        （res_type != 2）、把文件夹整体跳过，导致云端复查永远查不到已转存的
+        同名资源——重启/停开监控后，同一部片子换个磁力 hash 就会被当作
+        「云端没有」反复转存出副本。现在文件和文件夹都会进入比对。
         """
         if category and self.resolver.exists(category):
             parent_id, _ = self.resolver.resolve(category, create_missing=False)
@@ -275,9 +317,10 @@ class CloudDedup:
         if not parent_id:
             return None
         for e in self._list_dir_entries(parent_id):
-            if int(e.get("res_type", 0)) == 2:
+            name = e.get("name") or ""
+            if not name:
                 continue
-            if names_match(title, e["name"]):
+            if names_match(title, name):
                 return e
         return None
 
