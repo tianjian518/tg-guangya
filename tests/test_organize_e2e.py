@@ -61,7 +61,7 @@ class FakeGuangya:
         return "/".join(reversed(parts)) or "根目录"
 
 
-def main():
+def test_organize_e2e():
     client = FakeGuangya()
     root = client.create_folder("", "TG转存")          # 用户选的转存根目录
     store = Store(":memory:")
@@ -71,6 +71,9 @@ def main():
     resolver = CategoryResolver(client, root_id=root, create_missing=True)
 
     # 复用 main.py 的 handler 逻辑（这里简化复刻，验证分类→建目录→提交）
+    # 与线上一致：先 analyze 取出 region_hint（来自片名库/TMDB 的权威地区），
+    # 再交给 classifier，避免「用英文原名直接分类 → 华语片误判欧美」。
+    from core.ident import analyze as _ident_analyze
     def handle(msg):
         from core.store import MagnetRecord
         for url in msg.links:
@@ -82,7 +85,10 @@ def main():
             if not ok:
                 store.update(key, status="skipped", reason=reason)
                 continue
-            cr = clf.classify(msg.text)
+            info = _ident_analyze(msg.text)
+            cr = clf.classify(msg.text, extra=info.folder,
+                             region_hint=info.region_hint,
+                             region_hint_strong=info.region_hint_strong)
             target, path = resolver.resolve(cr.category)
             task_id, _ = client.create_offline_task(url, target)
             store.update(key, status="submitted", task_id=task_id, category=path)
@@ -98,6 +104,12 @@ def main():
         ("BBC 地球脉动 第三季 纪录片 1080P", "纪录片"),
         ("周杰伦 演唱会 2023 1080P 国语", "演唱会"),
         ("无间道 2002 粤语中字 1080P", "华语电影"),
+        # —— 以下为英文标题，验证 region_hint 路径：华语/日韩片不能误判欧美 ——
+        ("New Dragon Gate Inn [1992] 1080p BluRay", "华语电影"),   # 新龙门客栈（港片）
+        ("Cold.War.1994.2026.1080p.HiveWeb.mkv", "华语电影"),      # 冷战（港片）
+        ("Squid Game Season 1 1080p WEB-DL", "日韩剧"),            # 鱿鱼游戏（韩剧）
+        ("The Wandering Earth 2019 4K", "华语电影"),               # 流浪地球（华语）
+        ("Oppenheimer.2023.4K.WEB-DL.English", "欧美电影"),        # 奥本海默（真欧美）
     ]
 
     print("开始处理 10 条频道消息：\n")
@@ -128,4 +140,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    test_organize_e2e()

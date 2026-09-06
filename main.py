@@ -195,15 +195,23 @@ def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
         return False
 
     client.rename_file(fid, cn_folder)
-    log.info("外层文件夹已重命名为中文: %s", cn_folder)
-    return True
+    # 校验：重新列举目录，确认中文名已真正生效（防止接口静默忽略）
+    try:
+        entries = client.list_dir(parent_id)
+    except GuangyaError:
+        entries = []
+    if any(_norm(e.get("name")) == _norm(cn_folder) for e in entries if e.get("res_type") == 2):
+        log.info("外层文件夹已重命名为中文: %s", cn_folder)
+        return True
+    log.warning("改名后校验失败：目录中未找到 %s，保持英文原名", cn_folder)
+    return False
 
 
 def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int,
-               cn_title: str = "") -> tuple[bool, str, str, str, bool | None]:
+               cn_title: str = "") -> tuple[bool, str, str, str, bool | None, str]:
     """提交单个链接到光鸭离线下载。
 
-    返回 (ok, task_id, name, final_status_text, rename_ok)。
+    返回 (ok, task_id, name, final_status_text, rename_ok, cn_folder)。
     rename_ok 为 None 表示未尝试改名（无中文标题），True 成功，False 失败。
     提交后会等待离线任务完成（最多 _OFFLINE_WAIT_TIMEOUT 秒），
     超时或失败时仍返回 ok=True（因为任务已创建，只是未完成）。
@@ -229,21 +237,21 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
                     except GuangyaError as exc:
                         rename_ok = False
                         log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
-                return True, task_id, name, "done", rename_ok
+                return True, task_id, name, "done", rename_ok, cn_folder
             if status_code in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
                 log.warning("任务 %s 失败: %s", task_id, msg)
-                return False, task_id, name, f"failed: {msg}", rename_ok
+                return False, task_id, name, f"failed: {msg}", rename_ok, cn_folder
             # 超时或未结束：任务仍在进行中，视为提交成功
             log.info("任务 %s 仍在进行中: %s", task_id, msg)
-            return True, task_id, name, "pending", rename_ok
+            return True, task_id, name, "pending", rename_ok, cn_folder
         except GuangyaError as exc:
             last_err = str(exc)
             low = last_err.lower()
             if "次数" in last_err or "限额" in last_err or "quota" in low:
-                return False, "", f"离线配额不足: {last_err}", "quota_exceeded", rename_ok
+                return False, "", f"离线配额不足: {last_err}", "quota_exceeded", rename_ok, cn_folder
             if attempt < max_retries:
                 time.sleep(min(30, attempt * 5))
-    return False, "", last_err, "error", rename_ok
+    return False, "", last_err, "error", rename_ok, cn_folder
 
 
 def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
@@ -326,12 +334,15 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
             target, category = pick_target(msg.text)
-            ok2, task_id, name, final_status, rename_ok = submit_one(
+            ok2, task_id, name, final_status, rename_ok, cn_folder = submit_one(
                 client, url, target, max_retries, cn_title=msg.text)
             if ok2:
                 db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
+                renamed = 1 if rename_ok is True else (2 if rename_ok is False else 0)
                 store.update(h, status=db_status,
-                             task_id=task_id, category=category)
+                             task_id=task_id, category=category,
+                             parent_id=target, cn_folder=cn_folder,
+                             renamed=renamed)
                 # 真正落盘成功 → 记内容账本（后续同片不同磁力也能认出来）
                 if final_status == "done":
                     _record_ledger(store, msg.text, category)
@@ -384,18 +395,31 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
                     tid = (rec.task_id or "").strip()
                     if tid not in task_map:
                         # 任务已从光鸭侧清除（可能是用户手动删除），标记 failed
-                        store.update(tid, status="failed", reason="任务被清除（可能手动删除）")
+                        store.update(rec.hash, status="failed", reason="任务被清除（可能手动删除）")
                         updated += 1
                         continue
                     t = task_map[tid]
                     if t.status == GuangyaClient.STATUS_SUCCESS:
-                        store.update(tid, status="done")
+                        store.update(rec.hash, status="done")
                         # 提交时超时、实际在后台才完成的任务，落盘成功也要补记账本
                         _record_ledger(store, rec.title or "", rec.category or "")
+                        # 提交路径因超时而未改名时，监控线程补做中文改名
+                        if rec.cn_folder and rec.parent_id and rec.renamed not in (1, 2):
+                            try:
+                                rename_ok = _rename_folder_to_cn(
+                                    client, tid, t.name or "", rec.parent_id, rec.cn_folder)
+                                store.update(rec.hash, renamed=1 if rename_ok else 2)
+                                if rename_ok:
+                                    log.info("监控补改名成功: %s", rec.cn_folder)
+                                else:
+                                    log.warning("监控补改名失败: %s", rec.cn_folder)
+                            except Exception as exc:
+                                log.warning("监控补改名异常: %s", exc)
+                                store.update(rec.hash, renamed=2)
                         updated += 1
                         log.info("任务 %s 已完成", tid)
                     elif t.status in (GuangyaClient.STATUS_FAILED, GuangyaClient.STATUS_FAILED_ALT):
-                        store.update(tid, status="failed", reason=t.message or "离线下载失败")
+                        store.update(rec.hash, status="failed", reason=t.message or "离线下载失败")
                         updated += 1
                         log.warning("任务 %s 失败: %s", tid, t.message)
                     elif t.status == GuangyaClient.STATUS_RUNNING:

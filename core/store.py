@@ -22,6 +22,9 @@ class MagnetRecord:
     task_id: str = ""
     reason: str = ""
     category: str = ""        # 自动分类命中的子目录（如「华语电影」）
+    parent_id: str = ""       # 落盘目标目录 fileId
+    cn_folder: str = ""       # 期望的中文外层文件夹名
+    renamed: int = 0          # 0=未尝试/待处理 1=成功 2=失败
     created_at: float = 0.0
     updated_at: float = 0.0
 
@@ -62,6 +65,10 @@ class Store:
                 status TEXT,
                 task_id TEXT,
                 reason TEXT,
+                category TEXT,
+                parent_id TEXT,
+                cn_folder TEXT,
+                renamed INTEGER DEFAULT 0,
                 created_at REAL,
                 updated_at REAL
             )
@@ -99,10 +106,16 @@ class Store:
         self._conn.commit()
 
     def _migrate(self) -> None:
-        """旧库补列：新增 category 字段（记录自动分类结果）。"""
+        """旧库补列：新增 category / parent_id / cn_folder / renamed 字段。"""
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(magnets)")}
         if "category" not in cols:
             self._conn.execute("ALTER TABLE magnets ADD COLUMN category TEXT")
+        if "parent_id" not in cols:
+            self._conn.execute("ALTER TABLE magnets ADD COLUMN parent_id TEXT")
+        if "cn_folder" not in cols:
+            self._conn.execute("ALTER TABLE magnets ADD COLUMN cn_folder TEXT")
+        if "renamed" not in cols:
+            self._conn.execute("ALTER TABLE magnets ADD COLUMN renamed INTEGER DEFAULT 0")
 
 
     def seen(self, hash_: str) -> bool:
@@ -112,7 +125,8 @@ class Store:
     def get(self, hash_: str) -> Optional[MagnetRecord]:
         """按 hash 取单条记录；不存在返回 None。供云端去重复查本地历史。"""
         row = self._conn.execute(
-            "SELECT hash,channel,message_id,title,status,task_id,reason,category,created_at,updated_at "
+            "SELECT hash,channel,message_id,title,status,task_id,reason,category,"
+            "parent_id,cn_folder,renamed,created_at,updated_at "
             "FROM magnets WHERE hash=?",
             (hash_,),
         ).fetchone()
@@ -126,19 +140,22 @@ class Store:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO magnets
-            (hash, channel, message_id, title, status, task_id, reason, category, created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            (hash, channel, message_id, title, status, task_id, reason, category,
+             parent_id, cn_folder, renamed, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 rec.hash, rec.channel, rec.message_id, rec.title,
                 rec.status, rec.task_id, rec.reason, rec.category,
+                rec.parent_id, rec.cn_folder, rec.renamed,
                 rec.created_at, rec.updated_at,
             ),
         )
         self._conn.commit()
 
     def update(self, hash_: str, status: str = "", task_id: str = "",
-               reason: str = "", category: str = "") -> None:
+               reason: str = "", category: str = "", parent_id: str = "",
+               cn_folder: str = "", renamed: int = -1) -> None:
         sets, vals = [], []
         if status:
             sets.append("status=?"); vals.append(status)
@@ -148,6 +165,12 @@ class Store:
             sets.append("reason=?"); vals.append(reason)
         if category:
             sets.append("category=?"); vals.append(category)
+        if parent_id:
+            sets.append("parent_id=?"); vals.append(parent_id)
+        if cn_folder:
+            sets.append("cn_folder=?"); vals.append(cn_folder)
+        if renamed >= 0:
+            sets.append("renamed=?"); vals.append(renamed)
         if not sets:
             return
         sets.append("updated_at=?"); vals.append(time.time())
@@ -163,7 +186,8 @@ class Store:
 
     def recent(self, limit: int = 20) -> list[MagnetRecord]:
         rows = self._conn.execute(
-            "SELECT hash,channel,message_id,title,status,task_id,reason,category,created_at,updated_at "
+            "SELECT hash,channel,message_id,title,status,task_id,reason,category,"
+            "parent_id,cn_folder,renamed,created_at,updated_at "
             "FROM magnets ORDER BY updated_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
@@ -173,7 +197,7 @@ class Store:
                 offset: int = 0) -> list[MagnetRecord]:
         """监控历史：按更新时间倒序返回记录，可按状态过滤。供面板「监控历史」页使用。"""
         sql = ("SELECT hash,channel,message_id,title,status,task_id,reason,category,"
-               "created_at,updated_at FROM magnets")
+               "parent_id,cn_folder,renamed,created_at,updated_at FROM magnets")
         args: list = []
         if status:
             sql += " WHERE status=?"

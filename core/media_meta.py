@@ -188,6 +188,10 @@ BUILTIN_CN: dict[str, str] = {
     "thelegend": "方世玉",
     "fongsauyuk": "方世玉",
     "lastmanstanding": "和平饭店",
+    # 港片《冷战》（1994）。注意：另有 2018 年波兰同名片《Cold War》，
+    # 此处按用户媒体库实际收录的港片登记为华语；若你要收波兰那部，
+    # 请在数据目录 user_dict.json 里覆盖（{"Cold War 2018": "冷战"}+地区）。
+    "coldwar": "冷战",
 
     # ---------- 好莱坞：经典 ----------
     "theshawshankredemption": "肖申克的救赎",
@@ -308,6 +312,12 @@ BUILTIN_CN: dict[str, str] = {
     "munich": "慕尼黑",
     "bridgeofspies": "间谍之桥",
     "theread": "朗读者",
+    # 罗汉系列（Oceans Eleven / Twelve / Thirteen）
+    "oceanseleven": "十一罗汉",
+    "oceanstwelve": "十二罗汉",
+    "oceansthirteen": "十三罗汉",
+    # 1980 意大利惊悚片（压制组常带 ITALIAN 标签，噪声剥离后正好命中本条）
+    "houseontheedgeofthepark": "公园边缘的房子",
 
     # ---------- 好莱坞：近十年热门 ----------
     "oppenheimer": "奥本海默",
@@ -471,6 +481,10 @@ BUILTIN_CN: dict[str, str] = {
     "mypeoplemyhomeland": "我和我的家乡",
     "mypeoplemyparents": "我和我的父辈",
     "himom": "你好，李焕英",
+    # 2018 美国桌面悬疑片（压制组原名 Searching.2018…FGT）
+    "searching": "网络谜踪",
+    # 2022 法国/意大利合拍（原标 Novembre.2022.FRENCH…）
+    "novembre": "十一月",
 
     # ---------- 动画（迪士尼 / 皮克斯 / 吉卜力 / 日本动画）----------
     "toystory": "玩具总动员",
@@ -884,6 +898,7 @@ BUILTIN_REGION: dict[str, str] = {
     "cj7": "cn",
     "closeencountersofthethirdkind": "west",
     "coilingdragon": "cn",
+    "coldwar": "cn",
     "conair": "west",
     "confucius": "cn",
     "crashlandingonyou": "jpkr",
@@ -992,7 +1007,7 @@ BUILTIN_REGION: dict[str, str] = {
     "hawkeye": "west",
     "heavenofficialsblessing": "cn",
     "hero": "cn",
-    "himom": "west",
+    "himom": "cn",          # 你好，李焕英（贾玲，华语）
     "hisdarkmaterials": "west",
     "hobbsandshaw": "west",
     "hometownchachacha": "jpkr",
@@ -1004,6 +1019,7 @@ BUILTIN_REGION: dict[str, str] = {
     "houseofcards": "west",
     "houseofflyingdaggers": "cn",
     "houseofthedragon": "west",
+    "houseontheedgeofthepark": "west",
     "howlsmovingcastle": "jpkr",
     "howtotrainyourdragon": "west",
     "howtotrainyourdragon2": "west",
@@ -1106,8 +1122,8 @@ BUILTIN_REGION: dict[str, str] = {
     "munich": "west",
     "mymister": "jpkr",
     "myneighbortotoro": "jpkr",
-    "mypeoplemycountry": "west",
-    "mypeoplemyhomeland": "west",
+    "mypeoplemycountry": "cn",    # 我和我的祖国（华语）
+    "mypeoplemyhomeland": "cn",   # 我和我的家乡（华语）
     "mypeoplemyparents": "west",
     "naruto": "jpkr",
     "nevergonnagiveyouup": "cn",
@@ -1123,7 +1139,11 @@ BUILTIN_REGION: dict[str, str] = {
     "normalpeople": "west",
     "nothingbutyou": "cn",
     "notimetodie": "west",
+    "novembre": "west",
     "noweapons": "cn",
+    "oceanseleven": "west",
+    "oceanstwelve": "west",
+    "oceansthirteen": "west",
     "oldboy": "west",
     "onandon": "cn",
     "onceuponatimeinchina": "cn",
@@ -1177,6 +1197,7 @@ BUILTIN_REGION: dict[str, str] = {
     "scarface": "west",
     "schindlerslist": "west",
     "se7en": "west",
+    "searching": "west",
     "secretinvasion": "west",
     "seven": "west",
     "severance": "west",
@@ -1247,12 +1268,12 @@ BUILTIN_REGION: dict[str, str] = {
     "thebadguys2": "west",
     "thebanquet": "cn",
     "thebatman": "west",
-    "thebattleatlakechangjin": "west",
-    "thebattleatlakechangjinii": "west",
+    "thebattleatlakechangjin": "cn",        # 长津湖（华语）
+    "thebattleatlakechangjinii": "cn",      # 长津湖之水门桥（华语）
     "thebear": "west",
     "thebigbangtheory": "west",
     "thebookofbobafett": "west",
-    "theboyandtheheron": "west",
+    "theboyandtheheron": "jpkr",   # 你想活出怎样的人生（吉卜力，日本）
     "theboys": "west",
     "thebridewithwhitehair": "cn",
     "thebridgeontheriverkwai": "west",
@@ -1369,7 +1390,7 @@ BUILTIN_REGION: dict[str, str] = {
     "thewire": "west",
     "thewitcher": "west",
     "thewolverine": "west",
-    "theworldofthemarried": "west",
+    "theworldofthemarried": "jpkr",  # 夫妻的世界（韩剧）
     "theyuanfen": "cn",
     "thor2": "west",
     "thorloveandthunder": "west",
@@ -1516,6 +1537,47 @@ PHRASE_CN: list[tuple[str, str]] = [
 _NORM_PHRASES: list[tuple[str, str]] = [
     (re.sub(r"[\s\-\._'’]+", "", p.lower()), cn) for p, cn in PHRASE_CN
 ]
+
+# 短语命中时的地区补录表。
+# lookup 的短语分支原本查 BUILTIN_REGION.get(phrase)：但 phrase 是归一化短语串
+# （如 "newdragongate"），而 BUILTIN_REGION 的 key 是精确字典 key（如
+# "newdragongateinn"），两者对不上 → 短语命中时地区几乎恒为空。
+# 华语/日韩片因此拿不到 cn/jpkr 提示，分类器只能按「原标题 0% 中文」兜底判欧美——
+# 这正是「华语电影通通分到欧美电影」的根因。
+# 欧美短语丢地区影响不大（兜底本来就判欧美），所以这里优先补录非欧美短语。
+PHRASE_REGION: dict[str, str] = {
+    # 华语 / 港片
+    "dragon gate inn": "cn",
+    "new dragon gate": "cn",
+    "crouching tiger hidden dragon": "cn",
+    "crouching tiger": "cn",
+    "enter the dragon": "cn",
+    "game of death": "cn",
+    "fist of fury": "cn",
+    "once upon a time in china": "cn",
+    "a chinese odyssey": "cn",
+    "kung fu hustle": "cn",
+    "shaolin soccer": "cn",
+    "the wandering earth": "cn",
+    "creation of the gods": "cn",
+    "the battle at lake changjin": "cn",
+    "my people my country": "cn",
+    "hi mom": "cn",
+    # 日韩
+    "the world of the married": "jpkr",
+    "crash landing on you": "jpkr",
+    "all of us are dead": "jpkr",
+    "extraordinary attorney woo": "jpkr",
+    "demon slayer": "jpkr",
+    "spy family": "jpkr",
+    "my neighbor totoro": "jpkr",
+    "howl's moving castle": "jpkr",
+    "the boy and the heron": "jpkr",
+    "squid game": "jpkr",
+}
+_NORM_PHRASE_REGION: dict[str, str] = {
+    re.sub(r"[\s\-\._'’]+", "", p.lower()): r for p, r in PHRASE_REGION.items()
+}
 
 
 # ---------------------------------------------------------------- 用户自定义
@@ -1683,7 +1745,11 @@ def lookup(title: str, year: int = 0) -> MediaMeta:
             for phrase, cn in _NORM_PHRASES:
                 if len(phrase) >= 5 and phrase in norm:
                     out = {"cn_name": cn, "original_language": "",
-                           "year": 0, "region": BUILTIN_REGION.get(phrase, ""),
+                           "year": 0,
+                           # 短语地区优先查补录表（PHRASE_REGION），
+                           # 查不到再退回 BUILTIN_REGION（精确 key，一般对不上短语）
+                           "region": (_NORM_PHRASE_REGION.get(phrase)
+                                      or BUILTIN_REGION.get(phrase, "")),
                            "source": "dict"}
                     break
 

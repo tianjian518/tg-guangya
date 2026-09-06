@@ -302,10 +302,19 @@ def test_cases():
     if d.action == "upgrade":
         results.append(("洗版/携带待删旧文件id", "有", "有" if d.replace_file_id else "无"))
 
-    # 28) 【中文规范准入】纯英文标题：无法规范成中文片名 → 放弃链接（不入盘）
+    # 28) 【不丢资源】纯英文且字典查不到译名的冷门片：
+    #     旧实现把它当成「无法规范成中文片名」直接放弃，等于白白丢资源；
+    #     现改为允许落盘（暂用原名），由调用方记入待翻译清单，补字典后可批量改名。
     c, r, clf, st, dd = build()  # 云端空
-    d = dd.decide("h_en_movie", "Oppenheimer 2023 4K WEB-DL English", st)
-    results.append(("准入/纯英文无法中文命名", "reject", d.action))
+    d = dd.decide("h_en_movie", "Some.Obscure.Indie.Film.2024.1080p.WEB-DL", st)
+    results.append(("不丢资源/查不到译名仍落盘", "transfer", d.action))
+
+    # 28b) 【中文命名生效】能译出中文的英文片 → 正常落盘，且落盘名是中文
+    c, r, clf, st, dd = build()
+    d = dd.decide("h_opp2", "Oppenheimer 2023 4K WEB-DL English", st)
+    results.append(("不丢资源/英文片译中文后落盘", "transfer", d.action))
+    info28 = ident_analyze("Oppenheimer 2023 4K WEB-DL English")
+    results.append(("不丢资源/落盘名为中文", "奥本海默.2023", info28.folder))
 
     # 29) 【整理归类准入】自动分类被关闭 → 没归类可进 → 一律放弃（不许裸丢根目录）
     cfg2 = AppConfig.load(str(BASE / "data" / "config.yaml"))
@@ -325,12 +334,16 @@ def test_cases():
     results.append(("准入/中文名+中文分类通过", "transfer", d.action))
 
     ok = 0
+    bad: list[str] = []
     for name, exp, got in results:
         hit = "OK " if exp == got else "BAD"
         if exp == got: ok += 1
+        else: bad.append(f"{name}: 期望={exp!r} 实际={got!r}")
         print(f"  {hit} {name:<26} 期望={exp:<12} 实际={got}")
     print(f"\n结果: {ok}/{len(results)} 通过")
-    return ok == len(results)
+    # 关键修正：必须真断言。早期版本只 `return ok == len(results)`，
+    # pytest 会当成「测试通过（返回值非空）」，导致真实失败被掩盖成一片绿。
+    assert not bad, "以下用例失败：\n  " + "\n  ".join(bad)
 
 
 def test_matching():
@@ -361,13 +374,15 @@ def test_matching():
         # 文本层匹配不到，属于后续 TMDB 集成的范畴，这里不设用例。
     ]
     ok = 0
+    bad: list[str] = []
     for a, b, exp in cases:
         got = names_match(a, b)
         hit = "OK " if got == exp else "BAD"
         if got == exp: ok += 1
+        else: bad.append(f"names_match({a!r}, {b!r}) = {got}，期望 {exp}")
         print(f"  {hit} names_match({a!r}, {b!r}) = {got} (期望 {exp})")
     print(f"\n匹配单测: {ok}/{len(cases)} 通过")
-    return ok == len(cases)
+    assert not bad, "匹配用例失败：\n  " + "\n  ".join(bad)
 
 
 def test_ident():
@@ -392,14 +407,16 @@ def test_ident():
         ("奥本海默 Oppenheimer 2023 BluRay 英语中字", "奥本海默 2023 4K 国语", True),
     ]
     ok = 0
+    bad: list[str] = []
     for ta, tb, same in cases:
         a, b = analyze(ta), analyze(tb)
         got = (a.key == b.key)
         hit = "OK " if got == same else "BAD"
         if got == same: ok += 1
+        else: bad.append(f"{ta!r} vs {tb!r}: 同一={got}，期望 {same}")
         print(f"  {hit} {ta[:30]!r:<34} key={a.folder!r:<24} | {tb[:26]!r:<30} key={b.folder!r:<24} 同一={same}")
     print(f"\n身份识别单测: {ok}/{len(cases)} 通过")
-    return ok == len(cases)
+    assert not bad, "身份识别用例失败：\n  " + "\n  ".join(bad)
 
 
 def test_quality():
@@ -413,22 +430,24 @@ def test_quality():
         ("4K HDR10 Atmos HEVC 10bit", 120 + 8 + 10 + 15 + 4),          # 全部叠加
     ]
     ok = 0
+    bad: list[str] = []
     for title, exp in cases:
         got = quality_score(title)
         hit = "OK " if got == exp else "BAD"
         if got == exp: ok += 1
+        else: bad.append(f"quality_score({title!r}) = {got}，期望 {exp}")
         print(f"  {hit} quality_score({title!r}) = {got} (期望 {exp})")
     # 关键比较：4K 必须高于 1080P
     assert quality_score("X 4K 2160p") > quality_score("X 1080p"), "4K 应高于 1080P"
     assert quality_score("X 1080p REMUX") > quality_score("X 1080p"), "REMUX 应高于同分辨率普通版"
     print(f"\n质量评分单测: {ok}/{len(cases)} 通过")
-    return ok == len(cases)
+    assert not bad, "质量评分用例失败：\n  " + "\n  ".join(bad)
 
 
 if __name__ == "__main__":
-    a = test_cases()
-    b = test_matching()
-    i = test_ident()
-    q = test_quality()
-    print("\n==== 结论:", "全部通过 ✅" if (a and b and i and q) else "存在失败 ❌")
-    sys.exit(0 if (a and b and i and q) else 1)
+    # 现在四个函数都改成「失败即抛断言」，不再靠返回值，这里直接顺序跑即可。
+    test_cases()
+    test_matching()
+    test_ident()
+    test_quality()
+    print("\n==== 结论: 全部通过 ✅")

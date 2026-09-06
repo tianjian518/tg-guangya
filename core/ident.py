@@ -79,21 +79,36 @@ def _find_year(s: str) -> int:
 
 
 def _strip_year(s: str) -> tuple[str, int]:
-    """剥掉年份，返回 (剩余文本, 年份)。用于把年份从片名区里拿走。"""
-    for m in _YEAR_ANY.finditer(s or ""):
-        if m.group() in _NOT_YEAR:
-            continue
-        return (s[:m.start()] + " " + s[m.end():]), int(m.group())
-    return (s or ""), 0
+    """剥掉**全部**年份，返回 (剩余文本, 第一个年份)。用于把年份从片名区里拿走。
+
+    旧实现只剥第一个就返回，导致 "Cold.War.1994.2026.…" 里的 2026（发布/重制年）
+    残留下来粘进片名 → core 变成 "ColdWar2026"，字典自然查不到译名。
+    info.year 仍取第一个年份（片子上映年），这是 analyze 想要的。
+    """
+    out = s or ""
+    first = 0
+    while True:
+        hit = False
+        for m in _YEAR_ANY.finditer(out):
+            if m.group() in _NOT_YEAR:
+                continue
+            if not first:
+                first = int(m.group())
+            out = out[:m.start()] + " " + out[m.end():]
+            hit = True
+            break
+        if not hit:
+            break
+    return out, first
 
 # 分辨率 / 编码 / 封装 / 画质音轨（剥掉，不参与身份）
 _TECH = re.compile(
     r"(?i)"
     r"\b(2160p|1440p|1080p|1080i|720p|480p|360p|4k|8k|uhd|fhd|hd|sdr)\b"
     r"|\b(blu[- ]?ray|bluray|bdrip|brrip|web[- ]?dl|webrip|webdl|remux|hdtv|hdrip|"
-    r"dvdrip|dvdr|h264|h265|x264|x265|hevc|avc|mpeg|yuv420p)\b"
+    r"dvdrip|dvdr|h\.?264|h\.?265|x\.?264|x\.?265|hevc|avc|mpeg|yuv420p)\b"
     r"|\b(remastered|restored|imax|hdr(?:10)?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
-    r"truehd|ac3|aac|flac|lpcm|5\.1|7\.1|10bit|8bit)\b"
+    r"truehd|ac3|aac|flac|lpcm|[1-9]\.[01]|10bit|8bit)\b"
     # DTS 家族整体匹配（含可选 MA 后缀）。必须放在所有短分支之前：
     # 若先被 dts[- ]?hd 吃掉，就会剩下孤立的 MA 粘进片名。
     # 且绝不能退化成裸 ma —— 那会啃掉 Terminator/Batman/The Matrix 里的 "ma"。
@@ -158,6 +173,52 @@ _PACK = re.compile(
 _KEEP = re.compile(r"[一-鿿A-Za-z0-9]")
 # 分隔符（点、空格、括号、横线等都算），清洗时换成空格再拼
 _SEP = re.compile(r"[。·•┈┄┉━─—\-–—_~|/\\\[\]【】()（）{}\"''`]+")
+
+# ---------------- 发布组 / 版本标记白名单 ----------------
+# 压制组名与版本标签会紧跟在片名后面（Oceans.Thirteen.2007.NF.4kTRASH），
+# 不剥掉就会：① 粘进片名 → 字典查不到译名；② 落盘文件夹名带垃圾后缀。
+# 采用**白名单**而非"任意大写串"贪心匹配，避免误伤真实片名里的单词
+# （如 Inferno / Shockwave 里的字母组合）。比对时小写化并去掉首尾标点。
+_RELEASE_GROUPS = {
+    # 压制组
+    "fgt", "4ktrash", "bone", "hiveweb", "nf", "hq", "yify", "yts",
+    "rarbg", "etrg", "sparks", "dz0n3", "d-z0n3", "cm8", "psa",
+    "taylor", "tcr", "telly", "bokutox", "nogrp", "anoxmous", "axxo",
+    "tfpdl", "trollhd", "ctrlhd", "wiki", "iguana", "oa", "akira",
+    "klaxxon", "paradox", "pseudo", "human", "strife", "mhd", "mk",
+    "framestor", "termit", "tayto", "playhd", "epsil0n", "geckos",
+    "playbook", "successfulcrab", "hc", "btg", "cmrg", "flux",
+    "galaxytv", "ntb", "rbg", "sva", "w4nk3r", "socialclub",
+    # 版本 / 媒介标记
+    "proper", "repack", "extended", "unrated", "limited", "theatrical",
+    "dual", "internal", "readnfo", "remastered", "restored", "hybrid",
+    "open", "matte", "criterion", "imax", "hdr10", "60fps", "120fps",
+    "dv", "atmos", "truehd", "dolby", "vision", "dts", "eac3", "lpcm",
+    # 语种标记（常被当作标签写在标题里，不是片名的一部分）
+    "french", "italian", "german", "spanish", "japanese", "korean",
+    "cantonese", "mandarin", "multi", "subs", "subbed", "dubbed",
+    # 片商/合集标记
+    "kungfu", "classics", "collection", "complete", "trilogy",
+}
+
+
+def _strip_release_tokens(s: str) -> str:
+    """按空格 + 点号切分，丢弃命中发布组/版本白名单的 token，返回剩余文本。
+
+    必须在 _SEP 把分隔符换成空格之后、_KEEP 摘字符（会把空格全丢掉、
+    造成 token 粘连）之前调用，否则片名与组名会粘成一个词而无从剥离。
+
+    点号**不在** _SEP 里（"Oceans.Thirteen" 的点是片名自带的），所以这里要
+    再按点号二次切分：否则 "Cold.War.1994.2026.2160p...60FPS.H.265" 会留下
+    一整个 ".60FPS.H.265." token，它不等于任何白名单项，组名就漏网了。
+    """
+    kept: list[str] = []
+    for tok in (s or "").split():
+        parts = [p for p in re.split(r"\.+", tok) if p]
+        keep = [p for p in parts if p.lower().strip("-_'’") not in _RELEASE_GROUPS]
+        if keep:
+            kept.append("".join(keep))
+    return " ".join(kept)
 
 
 def _cn_int(tok: str):
@@ -236,6 +297,9 @@ def _strip_noise(title: str, *, strip_trailing_nums: bool = False) -> str:
     s = _FILE_COUNT.sub(" ", s)
     s, _y = _strip_year(s)
     s = _SEP.sub(" ", s)
+    # 剥发布组/版本标记：必须在 _KEEP 之前——_KEEP 会把空格全丢掉造成 token 粘连，
+    # 粘成 "OceansThirteenNF4kTRASH" 后就无法再区分片名与组名了。
+    s = _strip_release_tokens(s)
     s = _KEEP.findall(s)          # 再去掉空格标点等，只留字
     s = "".join(s).strip()
     if strip_trailing_nums:
@@ -259,6 +323,21 @@ _EN_PART_RANGE = re.compile(r"(?i)\bpart\s*\d+\s*(?:&|and|与)\s*(?:part\s*)?\d+
 _EN_PART = re.compile(r"(?i)part\d+")
 
 
+def _camel_prefixes(s: str) -> list[str]:
+    """按驼峰（大写字母）边界生成逐步缩短的前缀，长 → 短。
+
+    "OppenheimerEnglish" -> ["Oppenheimer"]
+    "OceansThirteenNF"   -> ["OceansThirteen", "Oceans"]
+
+    用途：语种/压制组标签常粘在片名尾部（"…English"、"…KungFuClassics"），
+    整串查字典必然落空。按驼峰边界砍掉尾部再试，往往就能命中真实片名。
+    这比把 "English" 这类词塞进噪声白名单安全——后者会误伤
+    《The English Patient》（英伦病人）这种片名本身就含该词的情况。
+    """
+    idx = [i for i, c in enumerate(s or "") if c.isupper() and i > 0]
+    return [s[:i] for i in reversed(idx) if 0 < i < len(s)]
+
+
 def _lookup_en(core: str, year: int = 0) -> tuple[str, str]:
     """查英文片名的中文译名与地区码，返回 (译名, 地区码)。
 
@@ -275,6 +354,13 @@ def _lookup_en(core: str, year: int = 0) -> tuple[str, str]:
         if not q:
             q = core
         meta = media_meta.lookup(q, year)
+        # 整串查不到 → 按驼峰边界砍掉尾部标签再试（OppenheimerEnglish → Oppenheimer）
+        if not meta.cn_name:
+            for cut in _camel_prefixes(q):
+                m2 = media_meta.lookup(cut, year)
+                if m2.cn_name:
+                    meta = m2
+                    break
         return meta.cn_name, meta.region
     except Exception:
         return "", ""
