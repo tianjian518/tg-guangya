@@ -1,0 +1,32 @@
+# 临时诊断工作流：从 GitHub 机房抓取各磁力搜索站的响应样本
+# （沙箱/国内网络够不着这些站，GitHub 机房可达）。
+# 用法：Actions → fetch-samples → Run workflow → 下载 artifact search-samples
+name: fetch-samples
+on:
+  workflow_dispatch: {}
+permissions: {}
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fetch search API samples
+        run: |
+          mkdir -p samples
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          grab() { code=$(curl -sS -H "User-Agent: $UA" --max-time 20 -o "samples/$1" -w "%{http_code}" "$2" || echo ERR); echo "$1 -> $code"; }
+          grab yts_interstellar.json  "https://yts.mx/api/v2/list_movies.json?query_term=interstellar&limit=3&sort_by=seeds"
+          grab nyaa_en.xml            "https://nyaa.si/?page=rss&q=interstellar"
+          grab nyaa_cn_doupo.xml      "https://nyaa.si/?page=rss&q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9"
+          grab nyaa_cn_juqing.xml     "https://nyaa.si/?page=rss&q=%E5%BA%86%E4%BD%99%E5%B9%B4"
+          grab solid_v1.json          "https://solidtorrents.to/api/v1/search?q=interstellar"
+          grab solid_html.html        "https://solidtorrents.to/search?q=interstellar"
+          grab bt4g_search.html       "https://bt4g.org/search/interstellar"
+          grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
+          grab apibay_query.json      "https://apibay.org/q.php?q=interstellar&cat=0"
+          ls -la samples/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: search-samples
+          path: samples/
+          retention-days: 3
