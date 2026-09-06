@@ -247,6 +247,97 @@ class GuangyaClient:
         print("✅ 登录成功，令牌已保存")
         return self._access, self._refresh
 
+    # ---------- 短信验证码登录（手机号 + 短信码）----------
+
+    def sms_send_code(self, phone: str, captcha_token: str = "") -> str:
+        """向手机号发送短信验证码，返回 verification_id。
+
+        端点：POST /v1/auth/verification（对齐 Web 端 JS 逆向，
+        body 顶层 {phone_number: "+86 xxx", target: "ANY"}）。
+
+        ⚠️ 2026-09 实测：该接口被服务端强制要求图形验证码——缺少时返回
+        {"error": "captcha_required"}。合法的 captcha token 由浏览器过滑块后
+        写入 localStorage，SDK 通过 x-captcha-token 请求头携带。因此**纯脚本
+        环境走不通短信登录**，请用扫码登录（python login.py）。
+
+        captcha_token: 浏览器过完图形验证码后取得的 token（可选，服务端可用时传）。
+        """
+        headers = {"x-captcha-token": captcha_token} if captcha_token else None
+        body = {"phone_number": self._cn_phone(phone), "target": "ANY"}
+        data = self._account_post("/v1/auth/verification", body, extra_headers=headers) or {}
+        vid = (data.get("verificationId") or data.get("verification_id") or "").strip()
+        if not vid:
+            raise GuangyaError(f"光鸭发短信验证码失败，返回: {data}")
+        return vid
+
+    def sms_login(self, phone: str, sms_code: str, verification_id: str,
+                  captcha_token: str = "") -> tuple[str, str]:
+        """用短信验证码登录，返回 (access_token, refresh_token)。
+
+        完整三步（对齐 Web 端 JS 逆向）：
+          ① sms_send_code → verification_id（需图形验证码，见上）
+          ② POST /v1/auth/verification/verify {verification_id, verification_code}
+             → verification_token
+          ③ POST /v1/auth/signin {verification_code, verification_token,
+             username: "+86 xxx"}
+        同样受图形验证码限制，纯脚本环境请用扫码登录（python login.py）。
+        """
+        headers = {"x-captcha-token": captcha_token} if captcha_token else None
+        vbody = {"verificationId": verification_id, "verificationCode": str(sms_code)}
+        # verify 端点的字段名未在真实环境验证过（发码步已被 captcha 挡住），
+        # 两种命名都试一下，成功为准。
+        vtoken = ""
+        last_err: Exception | None = None
+        for payload in (
+            vbody,
+            {"verification_id": verification_id, "verification_code": str(sms_code)},
+        ):
+            try:
+                data = self._account_post("/v1/auth/verification/verify", payload,
+                                          extra_headers=headers) or {}
+            except GuangyaError as exc:
+                last_err = exc
+                continue
+            vtoken = (data.get("verificationToken") or data.get("verification_token")
+                      or data.get("token") or "").strip()
+            if vtoken:
+                break
+        if not vtoken:
+            raise GuangyaError(f"光鸭短信码校验失败: {last_err}")
+
+        body = {
+            "username": self._cn_phone(phone),
+            "verification_code": str(sms_code),
+            "verification_token": vtoken,
+        }
+        data = self._account_post("/v1/auth/signin", body, extra_headers=headers) or {}
+        access = self._first_token(data, "access_token", "accessToken", "token")
+        refresh = self._first_token(data, "refresh_token", "refreshToken")
+        if not access:
+            raise GuangyaError(f"光鸭短信登录失败，返回: {data}")
+        self._access = access
+        if refresh:
+            self._refresh = refresh
+        self._expire_at = time.time() + 7200 - 900
+        return access, refresh
+
+    @staticmethod
+    def _first_token(data: dict, *keys: str) -> str:
+        """兼容 token 在顶层或 data 层两种返回结构。"""
+        if not isinstance(data, dict):
+            return ""
+        for k in keys:
+            v = data.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        sub = data.get("data")
+        if isinstance(sub, dict):
+            for k in keys:
+                v = sub.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        return ""
+
     # ---------- 底层请求 ----------
 
     def _api_headers(self, auth: bool = True) -> dict:
@@ -344,10 +435,22 @@ class GuangyaClient:
             raise GuangyaError(envelope.get("message") or f"光鸭错误 {envelope.get('code')}")
         return envelope.get("data")
 
-    def _account_post(self, path: str, body: dict, auth: bool = False) -> Any:
+    @staticmethod
+    def _cn_phone(phone: str) -> str:
+        """归一成光鸭要求的 "+86 xxxxxxxxxx"（带空格）格式。"""
+        s = str(phone).strip()
+        if s.startswith("+86"):
+            s = s[3:].strip()
+        return "+86 " + s
+
+    def _account_post(self, path: str, body: dict, auth: bool = False,
+                      extra_headers: dict | None = None) -> Any:
         # raw=True：账户接口返回顶层 JSON，不做 data 拆包
+        headers = self.build_account_headers()
+        if extra_headers:
+            headers = {**headers, **extra_headers}
         return self._post(ACCOUNT_BASE, path, body, auth=False,
-                          headers=self.build_account_headers(), raw=True)
+                          headers=headers, raw=True)
 
     def _throttle(self) -> None:
         """业务接口节流：避免高频调用触发光鸭限流（HTTP 429 / 业务码 354）。"""
@@ -380,8 +483,10 @@ class GuangyaClient:
                             cn_name: str = "", resolved: dict | None = None) -> tuple[str, str]:
         """提交离线下载，返回 (task_id, 解析出的英文原名)。
 
-        cn_name 为可选的中文文件名——若光鸭支持在创建时指定，文件直接以中文名落地；
-        若不支持则忽略，调用方可在任务完成后用 rename_file 补救。
+        cn_name 为可选的中文文件名。⚠️ 2026-09 实测：光鸭服务端会忽略该字段
+        （LitePan 的 create_task 同样不传名字，任务名由服务端按资源内容生成），
+        所以「下载时直接指定中文名」走不通，中文名靠任务完成后 rename_file 补做
+        （见 main.py 监控线程）。保留传参无害，留作未来服务端放开时的兼容。
         resolved 可传入已解析结果以复用，避免重复调用 resolve 接口。
         """
         if resolved is None:
@@ -400,15 +505,21 @@ class GuangyaClient:
         return task_id, resolved.get("name", "")
 
     def rename_file(self, file_id: str, new_name: str) -> None:
-        """尝试重命名网盘文件（失败安全由调用方保证）。
+        """重命名网盘文件/目录。
 
-        接口对齐 LitePan transport.go 的 pathRenameFile：
-          POST /userres/v1/file/rename   body {"fileId": ..., "fileName": ...}
-        若光鸭无此接口会抛 GuangyaError，调用方捕获后保留原名即可，不影响转存。
+        接口：POST /userres/v1/file/rename
+        body 字段名以 LitePan drivers/Guangya/ops.go 的 RenameFile 为准：
+          {"fileId": ..., "newName": ...}
+
+        ⚠️ 字段名是 `newName` 而非 `fileName`——2026-09 已用真实账号实测：
+        传 fileName 服务端报「文件名不能为空」；传 newName 改名真实生效
+        （改名后重新列举目录可查到新名，旧名消失）。
+
+        失败会抛 GuangyaError，由调用方决定是否降级为保留原名。
         """
         if not file_id or not new_name:
             return
-        self._api_post("/userres/v1/file/rename", {"fileId": file_id, "fileName": new_name})
+        self._api_post("/userres/v1/file/rename", {"fileId": file_id, "newName": new_name})
 
     def list_tasks(self, statuses: Iterable[int] | None = None, page_size: int = 50) -> list[OfflineTask]:
         """拉取离线任务列表（自动翻页）。"""

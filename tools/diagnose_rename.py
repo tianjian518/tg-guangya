@@ -36,11 +36,14 @@ from core.guangya import GuangyaClient, GuangyaError  # noqa: E402
 PROBE_PREFIX = "zz重命名探测"
 EXPECT_CN = "中文改名探测OK"
 
-# 候选：(接口路径, 文件名 body 键)。光鸭未公开文档，逐个试出真实可用的那个。
+# 候选：(接口路径, 文件名 body 键)。2026-09 真实账号实测结论：
+#   /userres/v1/file/rename + newName ✅ 改名真实生效（对齐 LitePan ops.go RenameFile）
+#   其余组合为历史候选，保留作对照。
 CANDIDATES = [
+    ("/userres/v1/file/rename", "newName"),
     ("/userres/v1/file/rename", "fileName"),
-    ("/userres/v1/file/rename_file", "fileName"),
     ("/userres/v1/file/rename", "name"),
+    ("/userres/v1/file/rename_file", "fileName"),
     ("/userres/v1/rename", "fileName"),
 ]
 
@@ -91,26 +94,28 @@ def main() -> int:
     created = []
     for idx, (path, name_key) in enumerate(CANDIDATES, 1):
         en_name = f"{PROBE_PREFIX}{idx}"
+        # 每个候选用独立的中文名，避免前一个候选改成功的目录污染本校验
+        expect_cn = f"{EXPECT_CN}{idx}"
         try:
             fid = client.create_folder(root, en_name)
         except GuangyaError as exc:
             print(f"   [{idx}] {path} ({name_key}) — 建目录失败，跳过: {exc}")
             results.append((path, name_key, "建目录失败"))
             continue
-        created.append((fid, en_name))
+        created.append((fid, en_name, expect_cn))
         time.sleep(0.4)
 
         # 调接口改名
         api_err = ""
         try:
-            client._api_post(path, {"fileId": fid, name_key: EXPECT_CN})
+            client._api_post(path, {"fileId": fid, name_key: expect_cn})
         except GuangyaError as exc:
             api_err = str(exc)[:80]
         time.sleep(0.6)
 
         # 复查：目录还在不在、名字变没变
         still_en = _find_dir(client, root, en_name)
-        now_cn = _find_dir(client, root, EXPECT_CN)
+        now_cn = _find_dir(client, root, expect_cn)
         if now_cn and not still_en:
             verdict = "✅ 生效"
         elif now_cn and still_en:
@@ -121,7 +126,7 @@ def main() -> int:
         results.append((path, name_key, verdict))
 
     print("\n④ 清理临时目录...")
-    for fid, en_name in created:
+    for fid, en_name, expect_cn in created:
         for _ in range(2):  # 改名成功的话，英文名那条已经不存在了，两种都试
             try:
                 client.delete_file(root, fid)
@@ -129,11 +134,11 @@ def main() -> int:
                 pass
             time.sleep(0.3)
         gone = _find_dir(client, root, en_name)
-        cn = _find_dir(client, root, EXPECT_CN)
+        cn = _find_dir(client, root, expect_cn)
         if not gone and not cn:
             print(f"   ✅ 已清理 {en_name}")
         else:
-            print(f"   ⚠️ 残留需手动删除: {en_name if gone else EXPECT_CN}")
+            print(f"   ⚠️ 残留需手动删除: {en_name if gone else expect_cn}")
 
     print("\n===== 结论 =====")
     working = [r for r in results if "生效" in r[2]]
@@ -143,7 +148,7 @@ def main() -> int:
         print("   → 把 core/guangya.py 的 rename_file() 改成这个路径即可，")
         print("     落盘后改名会自动生效，中文命名这条路走得通。")
     else:
-        print("❌ 四种候选接口全部无效 —— 光鸭服务端不支持重命名。")
+        print(f"❌ {len(results)} 种候选接口全部无效 —— 光鸭服务端不支持重命名。")
         print("   → 这意味着「离线下载后改名」这条路在架构上走不通：")
         print("     离线下载的文件名由服务端按种子内容生成，客户端改不了。")
         print("   → 可选替代方案：")
