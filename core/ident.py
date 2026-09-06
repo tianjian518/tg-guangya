@@ -174,6 +174,15 @@ _KEEP = re.compile(r"[一-鿿A-Za-z0-9]")
 # 分隔符（点、空格、括号、横线等都算），清洗时换成空格再拼
 _SEP = re.compile(r"[。·•┈┄┉━─—\-–—_~|/\\\[\]【】()（）{}\"''`]+")
 
+# 链接类前缀：频道消息几乎总是「标题 + 磁力/直链」连体，必须先把链接整段剥掉，
+# 否则 magnet:?xt=urn:btih:... 的字母数字会全部混入片名 core（真实事故：
+# "Titanic 1997 mkv magnet:?xt=..." 被算成 "Titanicmagnetxturnbtih0123...".1997，
+# 字典查不到译名 → 中文命名失败 → 落英文名）。
+_URL_NOISE = re.compile(
+    r"(?:magnet|ed2k|thunder|flashget|qqdl|ftp|https?)[:：]\?\S*|(?:magnet|ed2k|thunder|flashget|qqdl|ftp|https?)[:：]//[^\s，,。；;]+",
+    re.I,
+)
+
 # ---------------- 发布组 / 版本标记白名单 ----------------
 # 压制组名与版本标签会紧跟在片名后面（Oceans.Thirteen.2007.NF.4kTRASH），
 # 不剥掉就会：① 粘进片名 → 字典查不到译名；② 落盘文件夹名带垃圾后缀。
@@ -286,6 +295,7 @@ def _strip_noise(title: str, *, strip_trailing_nums: bool = False) -> str:
     """剥掉结构性尾巴与技术噪声，留下尽量干净的片名区。
     strip_trailing_nums=True 时额外去掉末尾的纯数字段（用于英文 core 翻译前的清理）。"""
     s = title
+    s = _URL_NOISE.sub(" ", s)    # 先剥磁力/直链（真实频道消息是「标题+链接」连体）
     s = _LEADING_TAG.sub("", s)
     s = _TAG_BRACE.sub(" ", s)
     s = _EPISODE_RANGE.sub(" ", s)

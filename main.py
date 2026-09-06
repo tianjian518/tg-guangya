@@ -136,16 +136,22 @@ def backfill_title_ledger(store: Store) -> int:
     return added
 
 
-def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
-                         parent_id: str, cn_folder: str) -> bool:
-    """把离线下载生成的【外层文件夹】重命名为中文名。返回 True 表示已处理。
+def _rename_artifact_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
+                           parent_id: str, cn_folder: str) -> bool:
+    """把离线下载产物（外层文件夹或单文件）重命名为中文名。返回 True 表示已处理。
 
-    定位文件夹有两条路（关键是第 ② 条兜底）：
-      ① 用离线任务返回的 fileId（并校验它确实是目标目录下的文件夹）
-      ② 拿不到 fileId 时，按英文种子原名在目录下匹配文件夹
+    产物有两种形态（均来自真实网盘观察，2026-09）：
+      - BT 磁力 → 文件夹（res_type=2），名字为种子名，无扩展名
+      - HTTP 直链 / 单文件种子 → 单个文件（res_type=1），名字带 .mkv 等扩展名
+    对文件改名时保留原扩展名（如 测试电影.2024.mkv），否则光鸭可能不识别媒体类型。
 
-    之前只走 ①，一旦光鸭 list_task 不返回 fileId 就【静默跳过、一条日志都没有】，
-    表现为「升级了却仍是英文名」。现在两条路都走，并且每步打日志便于排查。
+    定位产物有两条路（关键是第 ② 条兜底）：
+      ① 用离线任务返回的 fileId（并校验它确实是目标目录下的产物）
+      ② 拿不到 fileId 时，按英文种子原名在目录下匹配
+        （_norm 会抹平扩展名/WEB-DL 尾巴差异，文件与文件夹统一比对）
+
+    之前只走 ①，一旦光鸭 list_task 不返回 fileId 就【静默跳过、一条日志都没有】；
+    之前也只匹配文件夹，单文件产物【永远改不了名】。两条路 + 两种形态都覆盖。
     """
     try:
         entries = client.list_dir(parent_id)
@@ -153,57 +159,70 @@ def _rename_folder_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
         log.warning("改名失败：无法列举目标目录 %s（保持英文原名 %s）: %s",
                     parent_id, orig_name, exc)
         return False
-    folders = [e for e in entries if e.get("res_type") == 2]
+    artifacts = [e for e in entries if e.get("res_type") in (1, 2)]
 
-    # 已经是中文名（创建时即生效）→ 无需再动
-    if any(_norm(e.get("name")) == _norm(cn_folder) for e in folders):
-        log.info("外层文件夹已是中文名（创建时即生效）: %s", cn_folder)
+    # 已经是中文名 → 无需再动（_norm 抹平扩展名，文件夹/文件统一比对）
+    if any(_norm(e.get("name")) == _norm(cn_folder) for e in artifacts):
+        log.info("产物已是中文名（创建时即生效）: %s", cn_folder)
         return True
 
     fid = ""
+    ext = ""
     # ① 优先用离线任务返回的 fileId
     try:
         hit = next((t for t in client.list_tasks() if t.task_id == task_id and t.file_id), None)
     except GuangyaError:
         hit = None
     if hit:
-        if any(e.get("file_id") == hit.file_id for e in folders):
+        m = next((e for e in artifacts if e.get("file_id") == hit.file_id), None)
+        if m:
             fid = hit.file_id
+            name_e = m.get("name") or ""
+            if m.get("res_type") == 1 and "." in name_e:  # 单文件 → 记住原扩展名
+                ext = name_e.rsplit(".", 1)[1]
         else:
             log.info("改名诊断：离线任务 fileId=%s 不在目标目录内，改按英文原名匹配", hit.file_id)
     else:
         log.info("改名诊断：离线任务未返回 fileId，改按英文原名匹配")
 
-    # ② 按英文原名在目标目录内匹配文件夹（兜底，不依赖 fileId）
+    # ② 按英文原名在目标目录内匹配产物（兜底，不依赖 fileId）
     if not fid:
         want = _norm(orig_name)
-        for e in folders:
+        for e in artifacts:
             if _norm(e.get("name")) == want:
                 fid = e.get("file_id")
+                name_e = e.get("name") or ""
+                if e.get("res_type") == 1 and "." in name_e:
+                    ext = name_e.rsplit(".", 1)[1]
                 break
         if not fid:  # 子串兜底（云端名可能比种子名多 WEB-DL 之类尾巴）
-            for e in folders:
+            for e in artifacts:
                 n = _norm(e.get("name"))
                 if want and n and (want in n or n in want):
                     fid = e.get("file_id")
+                    name_e = e.get("name") or ""
+                    if e.get("res_type") == 1 and "." in name_e:
+                        ext = name_e.rsplit(".", 1)[1]
                     break
-        log.info("改名诊断：目标目录内共 %d 个文件夹，英文原名 %r → 匹配结果 %s",
-                 len(folders), orig_name, fid or "未匹配到")
+        log.info("改名诊断：目标目录内共 %d 个产物，英文原名 %r → 匹配结果 %s",
+                 len(artifacts), orig_name, fid or "未匹配到")
 
     if not fid:
-        log.warning("改名失败：未能定位外层文件夹（英文原名 %s），保持英文", orig_name)
+        log.warning("改名失败：未能定位产物（英文原名 %s），保持英文", orig_name)
         return False
 
-    client.rename_file(fid, cn_folder)
+    target_name = f"{cn_folder}.{ext}" if ext else cn_folder
+    client.rename_file(fid, target_name)
     # 校验：重新列举目录，确认中文名已真正生效（防止接口静默忽略）
     try:
         entries = client.list_dir(parent_id)
     except GuangyaError:
         entries = []
-    if any(_norm(e.get("name")) == _norm(cn_folder) for e in entries if e.get("res_type") == 2):
-        log.info("外层文件夹已重命名为中文: %s", cn_folder)
+    if any(_norm(e.get("name")) == _norm(target_name)
+           and e.get("file_id") == fid for e in entries if e.get("res_type") in (1, 2)):
+        log.info("产物已重命名为中文: %s", target_name)
         return True
-    log.warning("改名后校验失败：目录中未找到 %s，保持英文原名", cn_folder)
+    log.warning("改名后校验失败：目录中未找到 %s，保持英文原名", target_name)
     return False
 
 
@@ -233,7 +252,7 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
                 # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面的文件）
                 if cn_folder:
                     try:
-                        rename_ok = _rename_folder_to_cn(client, task_id, name, parent_id, cn_folder)
+                        rename_ok = _rename_artifact_to_cn(client, task_id, name, parent_id, cn_folder)
                     except GuangyaError as exc:
                         rename_ok = False
                         log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
@@ -380,8 +399,11 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
     def _loop() -> None:
         while True:
             try:
-                # 只查 pending/running 的任务（不需要反复查已完成的）
-                pending_tasks = client.list_tasks(statuses=[0, 1, 4])
+                # 必须查【全量】任务（含已完成 2 / 失败 3,5）：
+                # 实测光鸭按 status 过滤，若只查 [0,1,4]，任务完成的瞬间就会从
+                # 结果里消失 → 被下面的「不在列表」分支误标为「任务被清除」，
+                # 永远走不到补改名/记账逻辑（这是「落盘仍是英文名」的元凶之一）。
+                pending_tasks = client.list_tasks()
                 task_map = {t.task_id: t for t in pending_tasks}
                 if not task_map:
                     time.sleep(_TASK_MONITOR_INTERVAL)
@@ -406,7 +428,7 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
                         # 提交路径因超时而未改名时，监控线程补做中文改名
                         if rec.cn_folder and rec.parent_id and rec.renamed not in (1, 2):
                             try:
-                                rename_ok = _rename_folder_to_cn(
+                                rename_ok = _rename_artifact_to_cn(
                                     client, tid, t.name or "", rec.parent_id, rec.cn_folder)
                                 store.update(rec.hash, renamed=1 if rename_ok else 2)
                                 if rename_ok:
