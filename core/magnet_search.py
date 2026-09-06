@@ -3,17 +3,25 @@
 机器人能直接搜「全网磁力种子」而不是等频道更新：`/s 片名` 返回一批种子，
 点按钮或发链接即可一键转存光鸭。搜索发生在程序运行的这台机器上。
 
-默认引擎 apibay.org（The Pirate Bay 的公开 API）：
-    GET https://apibay.org/q.php?q=<关键词>&cat=0  →  JSON 数组
-    [{name, info_hash, seeders, leechers, size, category, imdb, ...}]
-    磁力 = magnet:?xt=urn:btih:<info_hash>&dn=<name>
+引擎（2026-09 实测样本驱动，样本存 tests/fixtures/）：
+  apibay  The Pirate Bay 公开 API（电影/欧美为主）。**不支持中文**：
+          收到中文 query 不搜索、只回全站热门榜（表现就是「每次搜出来
+          都一样」），必须翻成英文再搜。
+          GET https://apibay.org/q.php?q=<关键词>&cat=0  →  JSON 数组
+  nyaa    nyaa.si RSS（动漫/剧集全类，**直接吃中文**：斗破苍穹/庆余年等
+          国产剧国漫都能搜到，日韩更不用说）——中文资源短板的主要补充。
+          GET https://nyaa.si/?page=rss&q=<关键词>  →  RSS XML
+          样本实测：中文「斗破苍穹」返回 75 条、最新集次日即有。
 
 注意（部署这台机器的同学）：
 - 搜索引擎域名一般被污染/封锁，需要把「真实 IP」写进 /etc/hosts 才能连
-  （与 github.com 同款处理）。apibay.org 是 Cloudflare 段 104.21.x，可：
+  （与 github.com 同款处理）。可用阿里 DoH 查真实 IP（1.1.1.1/8.8.8.8 的
+  DoH 同样被拦，223.5.5.5 是逃生口）：
+      curl "https://223.5.5.5/resolve?name=apibay.org&type=A"  # JSON 里的 Answer
+      curl "https://223.5.5.5/resolve?name=nyaa.si&type=A"
       echo "<真实IP> apibay.org" | sudo tee -a /etc/hosts
-  真实 IP 变化后重查一次即可（dig @223.5.5.5 apibay.org +short）。
 - 搜索必须带浏览器 UA，否则 Cloudflare 直接 403。
+- nyaa.si 也可走 config 的 bot.proxy。
 """
 from __future__ import annotations
 
@@ -106,6 +114,39 @@ _CN_TO_EN = {
     "东京物语": "Tokyo Story", "七武士": "Seven Samurai",
     "罗生门": "Rashomon", "情书": "Love Letter",
     "白色巨塔": "The Hospital", "蓝色生死恋": "Autumn in My Heart",
+    # 近三年爆款电影
+    "哪吒之魔童闹海": "Ne Zha 2", "哪吒2": "Ne Zha 2",
+    "封神第一部": "Creation of the Gods I", "封神第二部": "Creation of the Gods II",
+    "热辣滚烫": "YOLO", "消失的她": "Lost in the Stars",
+    "孤注一掷": "No More Bets", "满江红": "Full River Red",
+    "坚如磐石": "Under the Light", "年会不能停": "Johnny Keep Walking",
+    "飞驰人生": "Pegasus", "飞驰人生2": "Pegasus 2",
+    "长安三万里": "Chang An", "深海": "Deep Sea",
+    "第二十条": "Article 20", "三大队": "Endless Journey",
+    "少年的你": "Better Days", "送你一朵小红花": "A Little Red Flower",
+    "人生大事": "Lighting Up the Stars", "独行月球": "Moon Man",
+    "刺杀小说家": "A Writer's Odyssey", "雄狮少年": "I Am What I Am",
+    "白蛇2青蛇劫起": "Green Snake", "误杀": "Sheep Without a Shepherd",
+    "志愿军": "The Volunteers", "好东西": "Her Story",
+    # 国漫（nyaa/种子站常用罗马化名）
+    "斗破苍穹": "Battle Through the Heavens", "斗罗大陆": "Soul Land",
+    "凡人修仙传": "A Record of a Mortal's Journey to Immortality",
+    "仙逆": "Renegade Immortal", "完美世界": "Perfect World",
+    "吞噬星空": "Swallowed Star", "遮天": "Shrouding the Heavens",
+    "诛仙": "Jade Dynasty", "少年歌行": "Great Journey of Teenagers",
+    # 热门剧集
+    "庆余年第二季": "Joy of Life 2", "莲花楼": "Mysterious Lotus Casebook",
+    "长相思": "Lost You Forever", "与凤行": "The Legend of Shen Li",
+    "墨雨云间": "The Double", "大奉打更人": "Guardians of the Dafeng",
+    "苍兰诀": "Love Between Fairy and Devil", "星汉灿烂": "Love Like the Galaxy",
+    "陈情令": "The Untamed", "琅琊榜": "Nirvana in Fire",
+    "甄嬛传": "Empresses in the Palace", "知否知否应是绿肥红瘦": "The Story of Ming Lan",
+    "都挺好": "All Is Well", "小欢喜": "A Little Reunion",
+    "白鹿原": "White Deer Plain", "人世间": "A Lifelong Journey",
+    "沉默的真相": "The Long Night", "无证之罪": "Burning Ice",
+    "白夜追凶": "Day and Night", "扫黑风暴": "Crime Crackdown",
+    "去有风的地方": "Meet Yourself", "琉璃": "Love and Redemption",
+    "山河令": "Word of Honor", "一念永恒": "A Will Eternal",
 }
 
 # MyMemory 返回的常夹带 HTML 标签残留与演职员表。遇到元信息词就截断，
@@ -215,6 +256,68 @@ def search_apibay(keyword: str, limit: int = 10, proxy: str = "",
     return hits
 
 
+# ---------------- Nyaa（动漫/剧集全类，支持中文原词）----------------
+
+NYAA_ENDPOINT = "https://nyaa.si/"
+_ITEM_RE = re.compile(r"<item>(.*?)</item>", re.S)
+_FIELD_RE = {f: re.compile(r"<%s>(.*?)</%s>" % (f, f), re.S)
+             for f in ("title", "nyaa:infoHash", "nyaa:seeders", "nyaa:size")}
+_UNIT_BYTES = {"B": 1, "KB": 10**3, "KiB": 1 << 10, "MB": 10**6, "MiB": 1 << 20,
+               "GB": 10**9, "GiB": 1 << 30, "TB": 10**12, "TiB": 1 << 40}
+
+
+def _parse_ib_size(text: str) -> int:
+    """「1.2 GiB」→ 字节数；解析不出返回 0（只影响展示排序，不致命）。"""
+    m = re.match(r"\s*([\d.]+)\s*([A-Za-z]+)", (text or "").strip())
+    if not m:
+        return 0
+    try:
+        return int(float(m.group(1)) * _UNIT_BYTES.get(m.group(2), 0))
+    except ValueError:
+        return 0
+
+
+def search_nyaa(keyword: str, limit: int = 10, proxy: str = "",
+                timeout: int = 12) -> List[SearchHit]:
+    """搜 nyaa.si RSS（动漫/剧集为主，中文/日韩资源覆盖远好于 TPB）。
+
+    直接吃中文原词（真实样本实测：中文「斗破苍穹」75 条、「庆余年」有结果）。
+    RSS 条目带 nyaa:infoHash / nyaa:seeders / nyaa:size，可直接构磁力。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    url = NYAA_ENDPOINT + "?" + urllib.parse.urlencode(
+        {"page": "rss", "q": kw, "f": "0", "c": "0_0"})
+    r = requests.get(url, headers={"User-Agent": SEARCH_UA},
+                     proxies=_proxies(proxy), timeout=timeout)
+    r.raise_for_status()
+    body = r.text or ""
+    if "<item>" not in body:
+        # nyaa 被Cloudflare 拦时返回 HTML 挑战页；正常空结果也有 RSS 头
+        raise RuntimeError("Nyaa 返回非 RSS（可能被 Cloudflare 拦），HTTP %s" % r.status_code)
+    hits: List[SearchHit] = []
+    for chunk in _ITEM_RE.findall(body):
+        def g(tag: str) -> str:
+            m = _FIELD_RE[tag].search(chunk)
+            return (m.group(1).strip() if m else "")
+        title = g("title")
+        info = g("nyaa:infoHash")
+        if not title or len(info) != 40:
+            continue
+        hits.append(SearchHit(
+            title=title,
+            size_bytes=_parse_ib_size(g("nyaa:size")),
+            seeders=int(g("nyaa:seeders") or 0),
+            magnet=_build_magnet(info, title),
+            source="nyaa",
+        ))
+        if len(hits) >= limit:
+            break
+    hits.sort(key=lambda h: h.seeders, reverse=True)
+    return hits
+
+
 def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
     """含中文的关键词先经免费翻译转英文，再喂给只吃英文的搜索引擎。
 
@@ -272,10 +375,15 @@ def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
     return final
 
 
-# 可扩展引擎表：加新源时实现同名函数并注册进来
+# 可扩展引擎表：加新源时实现同名函数并注册进来。
+# CJK_OK = 该引擎直接支持中文关键词（不走翻译）。
+#   apibay 不支持中文（中文 query 只回热门榜），必须先翻成英文；
+#   nyaa 直接吃中文（国漫/国产剧/日韩收录好，且用户看到的标题里本就有中文）。
 ENGINES = {
     "apibay": search_apibay,
+    "nyaa": search_nyaa,
 }
+CJK_OK_ENGINES = {"nyaa"}
 
 
 def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8,
@@ -283,10 +391,15 @@ def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8
     """按启用的引擎列表搜索，合并结果（去重磁力），返回 (hits, errors)。
 
     errors 里是各引擎失败的简要原因，供调用方提示用户。
+    中文关键词：支持中文的引擎（nyaa）用原词直搜；只吃英文的引擎（apibay）
+    先经本地词典/翻译转英文——分引擎处理，避免「为 nyaa 也翻一遍」既浪费
+    翻译请求，又把中文剧名翻成错误英文导致 nyaa 搜偏。
     """
-    engines = engines or ["apibay"]
-    # 搜索引擎（apibay）不支持中文：含中文关键词先翻译成英文再搜
-    kw = translate_cn_keyword(keyword)
+    engines = engines or list(ENGINES)
+    kw_raw = (keyword or "").strip()
+    needs_translation = any(e not in CJK_OK_ENGINES for e in engines) \
+        and bool(_CJK_RE.search(kw_raw))
+    kw_translated = translate_cn_keyword(kw_raw) if needs_translation else kw_raw
     hits: List[SearchHit] = []
     seen = set()
     errors: List[str] = []
@@ -295,6 +408,7 @@ def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8
         if fn is None:
             errors.append("未知引擎 %r" % name)
             continue
+        kw = kw_raw if name in CJK_OK_ENGINES else kw_translated
         try:
             got = fn(kw, limit=limit * 2, proxy=proxy, timeout=timeout)
             for h in got:

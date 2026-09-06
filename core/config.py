@@ -41,6 +41,10 @@ class TelegramConfig:
     session: str = "tg_user.session"
 
 
+# 与 core.magnet_search.ENGINES 保持同步的可用引擎名（配置白名单）+ 默认启用顺序
+DEFAULT_SEARCH_ENGINES = ["apibay", "nyaa"]
+SEARCH_ENGINE_NAMES = frozenset(DEFAULT_SEARCH_ENGINES)
+
 @dataclass
 class BotConfig:
     """Telegram 机器人（可选）：手机上双向控制 + 转存完成通知。
@@ -59,7 +63,7 @@ class BotConfig:
     proxy: str = ""              # 留空则沿用 sources.proxy
     allow_anyone: bool = False   # True = 所有人可用（不建议，谁都能往你盘里塞）
     search_enabled: bool = True  # /s 全网磁力搜索
-    search_engines: list[str] = field(default_factory=lambda: ["apibay"])  # apibay=海盗湾镜像API
+    search_engines: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_ENGINES))  # apibay=海盗湾镜像API；nyaa=动漫剧集（吃中文）
 
 
 @dataclass
@@ -179,9 +183,9 @@ class AppConfig:
             proxy=str(b.get("proxy", "")).strip(),
             allow_anyone=bool(b.get("allow_anyone", False)),
             search_enabled=bool(b.get("search_enabled", True)),
-            search_engines=(["apibay"] if raw_engines is None else
+            search_engines=(list(DEFAULT_SEARCH_ENGINES) if raw_engines is None else
                             [str(x).strip() for x in raw_engines
-                             if str(x).strip() in ("apibay",)]),
+                             if str(x).strip() in SEARCH_ENGINE_NAMES]),
         )
         o = raw.get("output") or {}
         cfg.output = OutputConfig(
