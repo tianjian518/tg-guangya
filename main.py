@@ -24,7 +24,13 @@ import time
 from adapters.web_scraper import WebScraper, link_key, extract_links
 from adapters.userbot import UserbotSource
 from adapters.tgbot import TgBot, BotMessage
-from core.guangya import GuangyaClient, GuangyaError, STATUS_TEXT
+from core.guangya import (
+    GuangyaClient,
+    GuangyaError,
+    GuangyaBizError,
+    STATUS_TEXT,
+    parse_share_url,
+)
 from core.store import Store, MagnetRecord, TitleRecord
 from core.matcher import KeywordFilter, parse_title
 from core.naming import build_cn_filename
@@ -343,6 +349,127 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     return False, "", last_err, "error", rename_ok, cn_folder
 
 
+def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: set[str],
+                            new_count: int, cn_folder: str, show_dir: str = "") -> bool:
+    """分享转存后的中文命名收纳（分门别类落盘的"命名"半边）。
+
+    转存是服务端新建副本：分享内条目的 fileId 不会出现在自己网盘里，
+    所以用「转存前后 list_dir(parent_id) 的差集」定位新条目，再：
+      - 1 个新条目：与离线链路同款口径——单文件保留扩展名改成 cn_folder；
+        剧集（show_dir 非空且是单文件）改名后收进剧名文件夹；文件夹产物直接改名。
+      - 多个新条目：解析得出剧名文件夹时整批收进去；否则建 cn_folder
+        文件夹归拢（分享是多文件合集，平铺会污染分类目录）。
+    返回 True 表示至少完成一次有效改名/收纳。
+    """
+    try:
+        after = client.list_dir(parent_id)
+    except GuangyaError as exc:
+        log.warning("分享收纳失败：无法列举目标目录: %s", exc)
+        return False
+    new_entries = [e for e in after
+                   if e.get("res_type") in (1, 2) and e.get("file_id") not in before_ids]
+    if not new_entries:
+        # 差集为空可能是目录本来就空/列表分页差异，退而用数量兜底提示
+        log.warning("分享收纳：未在目标目录发现新条目（分享根应有 %d 条）", new_count)
+        return False
+    if not cn_folder:
+        log.info("分享收纳：标题解析不出规范中文名，保持分享原名（%d 个条目）", len(new_entries))
+        return False
+
+    try:
+        if len(new_entries) == 1:
+            e = new_entries[0]
+            name_e = e.get("name") or ""
+            ext = ""
+            if e.get("res_type") == 1 and "." in name_e:
+                ext = name_e.rsplit(".", 1)[1]
+            target_name = f"{cn_folder}.{ext}" if ext else cn_folder
+            client.rename_file(e["file_id"], target_name)
+            # 单集文件 → 收进剧名文件夹（一部电视剧一个文件夹）
+            if show_dir and ext:
+                show_id = _ensure_subdir(client, parent_id, show_dir)
+                client.move_file(e["file_id"], show_id)
+                inner = [x.get("name") for x in client.list_dir(show_id)]
+                if target_name in inner:
+                    log.info("分享单集已收进剧名文件夹: %s/%s", show_dir, target_name)
+                    return True
+                log.warning("分享收纳：移入剧名文件夹后校验失败（%s）", target_name)
+                return True  # 改名已生效
+            log.info("分享产物已重命名为中文: %s", target_name)
+            return True
+
+        # 多条目：整批归拢
+        folder_name = show_dir or cn_folder
+        sub_id = _ensure_subdir(client, parent_id, folder_name)
+        moved = 0
+        for e in new_entries:
+            try:
+                client.move_file(e["file_id"], sub_id)
+                moved += 1
+            except GuangyaError as exc:
+                log.warning("分享收纳：移动 %s 失败（跳过）: %s", e.get("name"), exc)
+        log.info("分享合集 %d 条已收进文件夹: %s（成功移动 %d）", len(new_entries), folder_name, moved)
+        return moved > 0
+    except GuangyaError as exc:
+        log.warning("分享收纳失败（保持分享原名）: %s", exc)
+        return False
+
+
+def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
+                     cn_title: str = "") -> tuple[bool, str, str, str, bool | None, str]:
+    """识别光鸭分享链接并转存到自己网盘，返回结构与 submit_one 对齐。
+
+    (ok, task_id, name, final_status, rename_ok, cn_folder)
+    name 在分享场景下没有"英文原名"语义，放转存概要（如 "3 个文件"）。
+    """
+    parsed = parse_share_url(url)
+    if not parsed:
+        return False, "", "不是光鸭分享链接", "error", None, ""
+    share_id = parsed["share_id"]
+    cn_folder = build_cn_filename(cn_title) if cn_title else ""
+    show_dir = ""
+    if cn_title:
+        try:
+            cand = show_folder(cn_title)
+            info = analyze(cn_title)
+            if info.sig and cand and cand != cn_folder:
+                show_dir = cand
+        except Exception:  # noqa: BLE001 - 剧名文件夹算不出不影响主流程
+            show_dir = ""
+
+    try:
+        before_ids = {e.get("file_id") for e in client.list_dir(parent_id)}
+    except GuangyaError:
+        before_ids = set()
+
+    try:
+        res = client.save_share(url, parent_id)
+    except GuangyaBizError as exc:
+        if exc.code == 209:
+            msg = "分享需要提取码，链接里没有携带"
+        else:
+            msg = exc.msg or f"分享转存失败（业务码 {exc.code}）"
+        log.warning("分享转存失败 %s: %s", share_id, msg)
+        return False, "", msg, "error", None, cn_folder
+    except GuangyaError as exc:
+        log.warning("分享转存失败 %s: %s", share_id, exc)
+        return False, "", str(exc), "error", None, cn_folder
+
+    if not res.get("ok"):
+        log.warning("分享转存未完成 %s: %s", share_id, res.get("message"))
+        return False, res.get("task_id", ""), res.get("message") or "转存失败", "error", None, cn_folder
+
+    # 转存落盘成功 → 中文命名 + 剧集收纳（失败不回滚，只降级为保留分享原名）
+    rename_ok: bool | None = None
+    if cn_folder:
+        rename_ok = _organize_share_entries(client, parent_id, before_ids,
+                                            int(res.get("files") or 0),
+                                            cn_folder, show_dir=show_dir)
+    summary = f"{res.get('files', 0)} 个文件"
+    log.info("分享转存完成 %s: %s → %s", share_id, summary, parent_id)
+    return True, res.get("task_id", ""), summary, "done", rename_ok, cn_folder
+
+
 def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                  notifier: Notifier, parent_id: str, max_retries: int,
                  classifier: Classifier | None = None,
@@ -423,8 +550,14 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
             target, category = pick_target(msg.text)
-            ok2, task_id, name, final_status, rename_ok, cn_folder = submit_one(
-                client, url, target, max_retries, cn_title=msg.text)
+            if parse_share_url(url):
+                # 光鸭分享链接 → 分享转存链路（转存到自己盘后做中文命名收纳）。
+                # 不走 max_retries：分享转存不是幂等操作，重试可能产生重复副本。
+                ok2, task_id, name, final_status, rename_ok, cn_folder = submit_share_one(
+                    client, url, target, cn_title=msg.text)
+            else:
+                ok2, task_id, name, final_status, rename_ok, cn_folder = submit_one(
+                    client, url, target, max_retries, cn_title=msg.text)
             if ok2:
                 db_status = "done" if final_status == "done" else ("upgraded" if is_upgrade else "submitted")
                 renamed = 1 if rename_ok is True else (2 if rename_ok is False else 0)
@@ -610,7 +743,8 @@ def start_bot(cfg: AppConfig, config_path: str, store: Store, client: GuangyaCli
         links = extract_links(text or "")
         if not links:
             return ("没识别到可下载的链接。\n"
-                    "支持：磁力 magnet: / 迅雷 thunder: / 电驴 ed2k: / http 直链。")
+                    "支持：磁力 magnet: / 迅雷 thunder: / 电驴 ed2k: / http 直链 / "
+                    "光鸭分享链接（guangyapan.com/share/…）。")
         msg = BotMessage(links=links, text=(text or "")[:200],
                          channel="tgbot", message_id=str(chat_id))
         threading.Thread(target=_run_handler, args=(msg,),

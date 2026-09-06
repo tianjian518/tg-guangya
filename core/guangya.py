@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import re
 import time
 import uuid
 import logging
@@ -61,13 +62,68 @@ CODE_RATE_LIMIT = 354
 TASK_DONE = 2
 TASK_FAILED_STATUSES = (-1, 3, 5)
 
+# ---------- 分享转存专用业务码（2026-09 光鸭 Web 前端 bundle 逆向 + 官方埋点对齐）----------
+# get_share_summary 的 allowCode（非 0 但不算异常，前端按状态分流）：
+#   200/201 = 分享不存在或已失效（前端显示 invalid）
+#   202     = 分享已过期（前端显示 expired）
+SHARE_CODE_INVALID = 209      # get_share_access_token：提取码错误（前端转入"verifying"）
+SHARE_STATUS_INVALID = (200, 201)
+SHARE_STATUS_EXPIRED = 202
+
 
 class GuangyaError(Exception):
     """光鸭接口错误。"""
 
 
+class GuangyaBizError(GuangyaError):
+    """光鸭业务错误（信封 code != 0）。
+
+    与普通 GuangyaError 的区别：保留信封里的业务码 code 与原始 msg，
+    供分享链路区分「提取码错误(209)/分享过期(202)/分享失效(200,201)」等
+    需要差异化处理的状态。所有 except GuangyaError 的旧代码不受影响。
+    """
+
+    def __init__(self, code: int, msg: str = "", envelope: dict | None = None) -> None:
+        super().__init__(msg or f"光鸭业务错误 {code}")
+        self.code = code
+        self.msg = msg
+        self.envelope = envelope or {}
+
+
 class AuthExpired(GuangyaError):
     """令牌失效，需要重新扫码登录。"""
+
+
+def parse_share_url(url: str) -> dict | None:
+    """识别光鸭分享链接，返回 {share_id, code, share_code}；非分享链接返回 None。
+
+    真实链接格式（2026-09 官方/社区样本实测）：
+      https://www.guangyapan.com/s/1894410604530630727_aeXsY5wocgzRgFTv
+      https://www.guangyapan.com/s/189...?code=jiif        （提取码在 ?code=）
+      https://www.guangyapan.com/share/<shareId>           （前端 SPA 路由，亦兼容）
+      https://app.guangyapan.com/share/<shareId>?shareCode=<口令>
+    shareId = 匹配路径的最后一段（对齐前端 IL hook 的解析逻辑）。
+    提取码与口令可能同时存在，分别对应 get_share_access_token 的 code
+    与 restore_share 的 shareCode。
+    """
+    m = re.search(
+        r"https?://(?:[a-z0-9-]+\.)*guangyapan\.com/(?:share|s)/([A-Za-z0-9_-]+)",
+        (url or "").strip(), re.I,
+    )
+    if not m:
+        return None
+    share_id = m.group(1)
+
+    # query 里的提取码/口令：截至 & 或空白/中文括号（分享链接常被塞在长文本里）
+    def _q(key: str) -> str:
+        qm = re.search(rf"[?&]{key}=([^&\s\"'<>（）【】]+)", url, re.I)
+        return qm.group(1).strip() if qm else ""
+
+    return {
+        "share_id": share_id,
+        "code": _q("code"),
+        "share_code": _q("shareCode"),
+    }
 
 
 @dataclass
@@ -405,9 +461,14 @@ class GuangyaClient:
         # 业务接口信封：{code, msg, data:{...}}（部分接口也带 success 字段）
         code = envelope.get("code")
         if isinstance(code, int) and code != 0:
-            raise GuangyaError(envelope.get("msg") or envelope.get("message") or f"光鸭业务错误 {code}")
+            raise GuangyaBizError(
+                code, envelope.get("msg") or envelope.get("message") or f"光鸭业务错误 {code}",
+                envelope,
+            )
         if envelope.get("success") is False:
-            raise GuangyaError(envelope.get("message") or f"光鸭错误 {envelope.get('code')}")
+            raise GuangyaBizError(
+                -1, envelope.get("message") or f"光鸭错误 {envelope.get('code')}", envelope,
+            )
         return envelope.get("data")
 
     def _get(self, base: str, path: str, headers: dict | None = None,
@@ -771,6 +832,167 @@ class GuangyaClient:
                 break
             page += 1
         return out
+
+    # ---------- 分享链接转存（2026-09 光鸭 Web 前端 bundle 逆向 + 官方埋点对齐）----------
+    #
+    # 全链路（与前端 share 页面行为一致）：
+    #   ① get_share_summary        {shareId}                        → needCode/shareStatus
+    #   ② get_share_access_token   {shareId, code}                  → accessToken（209=提取码错）
+    #   ③ get_share_page_files_list {accessToken, parentId:"", pageSize, cursor} → 文件列表
+    #   ④ restore_share            {accessToken, fileIds, parentId, shareCode?} → taskId
+    #   ⑤ get_task_status 轮询     {taskId}                         → status==2 完成
+    #
+    # 官方埋点（pan_share_restore_task_create / pan_share_restore_task_completed）
+    # 确认 restore_share 就是「转存到自己网盘」的接口；埋点载荷字段
+    # share_id / restore_task_id / kouling（口令）与上述链路一一对应。
+
+    @staticmethod
+    def parse_share_url(url: str) -> dict | None:
+        """识别光鸭分享链接；实现见模块级 parse_share_url（测试/调用方均可直接用）。"""
+        return parse_share_url(url)
+
+    def get_share_summary(self, share_id: str) -> dict:
+        """分享摘要（needCode / shareStatus / shareName 等）。
+
+        分享失效(200,201)/过期(202)会抛 GuangyaBizError，code 属性可判断。
+        """
+        return self._api_post("/userres/v1/get_share_summary", {"shareId": share_id}) or {}
+
+    def get_share_access_token(self, share_id: str, code: str = "") -> str:
+        """用分享 id + 提取码换取分享访问令牌（后续文件列表/转存都用它鉴权）。"""
+        body: dict[str, Any] = {"shareId": share_id}
+        if code:
+            body["code"] = code
+        data = self._api_post("/userres/v1/get_share_access_token", body) or {}
+        token = (data.get("accessToken") or "").strip()
+        if not token:
+            raise GuangyaError("光鸭未返回分享 accessToken")
+        return token
+
+    def list_share_files(self, access_token: str, parent_id: str = "",
+                         page_size: int = 100, cursor: str = "") -> dict:
+        """列出分享内的文件/文件夹（cursor 分页）。
+
+        body 结构来自前端文件浏览 hook（bx/by）：{...params, parentId} +
+        cursor 模式附加 {cursor}；根目录 parentId=""。响应 {list, hasMore, cursor}。
+        """
+        body: dict[str, Any] = {
+            "accessToken": access_token,
+            "parentId": parent_id or "",
+            "pageSize": page_size,
+            "orderBy": 0,
+            "sortType": 0,
+        }
+        if cursor:
+            body["cursor"] = cursor
+        return self._api_post("/userres/v1/get_share_page_files_list", body) or {}
+
+    def list_share_all_files(self, access_token: str, parent_id: str = "") -> list[dict]:
+        """拉全分享目录（自动 cursor 翻页），返回与 list_dir 同构的条目列表。
+
+        真实响应（2026-09 实测）：{total, list, cursor}——
+          - cursor 是【数字】且可能为 0（falsy），必须显式 None 检查；
+          - 没有 hasMore 字段 → 翻页条件用 total（与 list_dir 同口径）；
+        双层防护（服务端分页异常时保命）：
+          1. 已用过的请求 cursor 不得再次发起（原地打转 → 立即停）
+          2. 条目按 fileId 去重（服务端重复返回同一页时不产生重复条目）
+        """
+        out: list[dict] = []
+        seen_ids: set[str] = set()
+        cursor: Any = ""          # 请求参数原样传递（首页 ""，后续回传服务端给的值）
+        used_keys: set[str] = {""}
+        total: int | None = None
+        while True:
+            data = self.list_share_files(access_token, parent_id, cursor=cursor)
+            for e in data.get("list") or []:
+                fid = (e.get("fileId") or "").strip()
+                if fid and fid in seen_ids:
+                    continue
+                if fid:
+                    seen_ids.add(fid)
+                out.append({
+                    "file_id": fid,
+                    "name": (e.get("fileName") or "").strip(),
+                    "size": int(e.get("fileSize") or 0),
+                    "res_type": int(e.get("resType") or 0),
+                    "parent_id": (e.get("parentId") or "").strip(),
+                })
+            if isinstance(data.get("total"), int):
+                total = data["total"]
+            # 翻页判定：total 已抓满 / 无 cursor / cursor 空或 0 / 原地打转 → 停
+            if total is not None and len(out) >= total:
+                break
+            if "cursor" not in data or data.get("cursor") is None:
+                break
+            raw = data["cursor"]
+            key = str(raw).strip()
+            if not key or key == "0" or key in used_keys:
+                break
+            used_keys.add(key)
+            cursor = raw  # 服务端给 int 就回传 int（实测 cursor 为数字）
+        return out
+
+    def restore_share(self, access_token: str, file_ids: list[str], parent_id: str,
+                      share_code: str = "") -> str:
+        """把分享内容转存到自己网盘的 parent_id 目录，返回异步任务 taskId。
+
+        fileIds 是分享内条目（文件或整个文件夹，文件夹会整体递归转存）。
+        shareCode 为口令分享时的口令值（普通链接分享无需传）。
+        返回的 taskId 用 wait_task() 轮询（status==2 完成，与 move/delete 同一套）。
+        """
+        if not file_ids:
+            raise GuangyaError("转存分享缺少 fileIds")
+        body: dict[str, Any] = {
+            "accessToken": access_token,
+            "fileIds": list(file_ids),
+            "parentId": parent_id or "",
+        }
+        if share_code:
+            body["shareCode"] = share_code
+        data = self._api_post("/userres/v1/restore_share", body) or {}
+        return (data.get("taskId") or "").strip()
+
+    def save_share(self, url: str, parent_id: str, timeout: int = 120) -> dict:
+        """识别分享链接并整体转存到 parent_id，返回执行摘要。
+
+        返回 {ok, share_id, task_id, files, entries, message}：
+          files   = 本次转存的分享根条目数
+          entries = 转存条目的 [{file_id, name, res_type}]（供调用方做中文命名）
+        提取码从链接 query 自动携带；没有提取码且需要时服务端会报
+        GuangyaBizError(209)（"需要提取码"），由调用方决定提示话术。
+        """
+        parsed = self.parse_share_url(url)
+        if not parsed:
+            return {"ok": False, "share_id": "", "task_id": "", "files": 0,
+                    "entries": [], "message": "不是光鸭分享链接"}
+        share_id = parsed["share_id"]
+        try:
+            self.get_share_summary(share_id)
+        except GuangyaBizError as exc:
+            if exc.code in SHARE_STATUS_INVALID:
+                return {"ok": False, "share_id": share_id, "task_id": "", "files": 0,
+                        "entries": [], "message": "分享不存在或已失效"}
+            if exc.code == SHARE_STATUS_EXPIRED:
+                return {"ok": False, "share_id": share_id, "task_id": "", "files": 0,
+                        "entries": [], "message": "分享已过期"}
+            raise
+        access = self.get_share_access_token(share_id, parsed["code"])
+        entries = self.list_share_all_files(access)
+        if not entries:
+            return {"ok": False, "share_id": share_id, "task_id": "", "files": 0,
+                    "entries": [], "message": "分享内容为空"}
+        file_ids = [e["file_id"] for e in entries if e["file_id"]]
+        task_id = self.restore_share(access, file_ids, parent_id,
+                                     share_code=parsed["share_code"])
+        ok = self.wait_task(task_id, timeout=timeout) if task_id else False
+        return {
+            "ok": ok,
+            "share_id": share_id,
+            "task_id": task_id,
+            "files": len(file_ids),
+            "entries": entries,
+            "message": "" if ok else ("转存任务已提交，等待结果" if task_id else "光鸭未返回转存任务号"),
+        }
 
 
 @dataclass

@@ -24,6 +24,12 @@ log = logging.getLogger(__name__)
 MAGNET_RE = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>）】]*", re.I)
 THUNDER_RE = re.compile(r"thunder://[A-Za-z0-9+/=]+", re.I)
 ED2K_RE = re.compile(r"ed2k://[^\s\"'<>）】]+", re.I)
+# 光鸭云盘分享链接（与 core.guangya.parse_share_url 的识别范围保持一致）。
+# 真实格式：/s/<数字>_<串>（官方短链）或 /share/<id>（SPA 路由），两者都收。
+GUANGYA_SHARE_RE = re.compile(
+    r"https?://(?:[a-z0-9-]+\.)*guangyapan\.com/(?:share|s)/[A-Za-z0-9_-]+[^\s\"'<>）】]*",
+    re.I,
+)
 MSG_ID_RE = re.compile(r'data-post="[^/]+/(\d+)"')
 MSG_TEXT_RE = re.compile(
     r'<div class="tgme_widget_message_text[^"]*"[^>]*>(.*?)</div>', re.S
@@ -37,19 +43,24 @@ UA = (
 
 
 def extract_links(text: str) -> list[str]:
-    """从文本中提取所有可离线下载的链接（磁力/迅雷/电驴/直链），去重保序。"""
+    """从文本中提取所有可处理的资源链接（磁力/迅雷/电驴/直链/光鸭分享），去重保序。"""
     found: list[str] = []
     seen: set[str] = set()
+
+    def _push(url: str) -> None:
+        u = url.rstrip(".,;，。；")
+        if u and u.lower() not in seen:
+            seen.add(u.lower())
+            found.append(u)
+
     for m in MAGNET_RE.findall(text or ""):
-        url = m.rstrip(".,;，。；")
-        if url.lower() not in seen:
-            seen.add(url.lower()); found.append(url)
+        _push(m)
     for m in THUNDER_RE.findall(text or ""):
-        if m.lower() not in seen:
-            seen.add(m.lower()); found.append(m)
+        _push(m)
     for m in ED2K_RE.findall(text or ""):
-        if m.lower() not in seen:
-            seen.add(m.lower()); found.append(m)
+        _push(m)
+    for m in GUANGYA_SHARE_RE.findall(text or ""):
+        _push(m)
     return found
 
 
@@ -59,10 +70,15 @@ def extract_magnets(text: str) -> list[str]:
 
 
 def link_key(url: str) -> str:
-    """去重主键：磁力取 btih（大小写归一），其余取小写全文。"""
+    """去重主键：磁力取 btih（大小写归一），光鸭分享取 shareId，其余取小写全文。"""
     m = re.search(r"urn:btih:([a-zA-Z0-9]{32,40})", url, re.I)
     if m:
         return m.group(1).lower()
+    # 分享链接用 shareId 做主键：同一分享的 code/shareCode query 可能各处写法不同，
+    # /s/ 与 /share/ 两种路径也要归到同一键；shareId 才是内容的稳定标识。
+    sm = re.search(r"guangyapan\.com/(?:share|s)/([A-Za-z0-9_-]+)", url, re.I)
+    if sm:
+        return f"guangya:{sm.group(1).lower()}"
     return url.lower().rstrip(".,;，。；")
 
 
