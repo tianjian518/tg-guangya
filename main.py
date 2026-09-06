@@ -350,15 +350,16 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
 
 
 def _extract_share_title(text: str, url: str) -> str:
-    """从频道消息里抠分享标题（取链接之前最近的短语）。
+    """从频道消息里抠分享标题。
 
-    频道消息的典型形态：「♥♥♥【国漫】装饰词♥♥♥\\n仙逆，链接：https://…」——
-    整条消息直接喂 build_cn_filename 会把装饰词全混进片名。策略：
-      1. 截取分享链接之前的文本；
-      2. 剥掉结尾的「链接：/地址：」引导词；
-      3. 按 ，,。；;/换行 切分取最后一段（装饰词都在前面，标题紧贴链接）；
-      4. 剥掉书名号/方括号等包裹装饰。
-    抠不出（空/纯装饰）时回退原文，ident 的噪声剥离兜底。
+    真实频道消息形态（2026-09 光鸭资源频道实测）：
+      「交锋--首更至3集-4稍后--无任何广-4K\n🅶https://…」   ← 标题在第一行，链接前是 emoji
+      「原盘影视：李小龙电影 复制链接到「光鸭APP」内观看和转存。\n链接：https://…」
+      「囧徒之预演告别 更10集 4KMAX画质 3G/集中文字幕 无广告 纯净\n光鸭云盘https://…」
+      「「李熊猫」，链接：https://…」
+    策略：取链接前文本的**第一个非空行**（频道消息标题几乎总在第一行），
+    再剥栏目前缀（原盘影视：）与引导尾巴（复制链接到…/链接：），书名号装饰一并剥。
+    第一行剥空则回退「最后一段」逻辑，再兜底原文（ident 的噪声剥离兜底）。
     """
     if not text or not url:
         return text or ""
@@ -368,13 +369,71 @@ def _extract_share_title(text: str, url: str) -> str:
     head = text[:m.start()].strip()
     if not head:
         return text
-    head = re.sub(r"(链接|地址|直链)\s*[:：]\s*$", "", head).strip()
+
+    def _clean(line: str) -> str:
+        line = re.sub(r"(链接|地址|直链)\s*[:：]\s*$", "", line).strip()
+        # 栏目前缀：「原盘影视：李小龙电影」→ 李小龙电影（≤8 字冒号头视为栏目）
+        line = re.sub(r"^[「『【]?[^「『【】』」：:]{1,8}[：:]\s*", "", line).strip()
+        # 引导尾巴：复制链接到「光鸭APP」内观看和转存。/ 打开链接 / 紧贴链接的「光鸭云盘」
+        line = re.sub(r"(复制链接|打开链接|链接|光鸭云盘).*$", "", line).strip()
+        # 首尾书名号/方括号装饰（保留圆括号——「遮天 (2023)」的括号是年份内容）
+        line = re.sub(r"^[「『【【]+|[」』】】]+$", "", line).strip()
+        # 剥「链接：」尾后残留的悬挂标点/书名号（仙逆，→ 仙逆；李熊猫」→ 李熊猫）
+        # ] 放字符集首位防止提前闭合
+        line = re.sub(r"[]」』】，,。．、；;：:!！?？…\s]+$", "", line).strip()
+        return line
+
+    # 装饰行判定：剥掉书名号/方括号包裹段与全部符号后几乎不剩正文
+    # （真实频道：「♥♥♥♥♥【国漫】【持续更新，敬请收藏】♥♥♥♥♥」）
+    # 注意必须分两步：[\W_] 会吞掉【破坏括号段匹配（♥♥♥♥♥【 被一次吃掉），
+    # 先剥完整括号段、再剥残余符号。
+    def _decorative(line: str) -> bool:
+        bare = re.sub(r"【[^】]*】|「[^」]*」|『[^』]*』|\[[^\]]*\]", "", line)
+        bare = re.sub(r"[\W_]+", "", bare)
+        return len(bare) < 2
+
+    # ① 第一个非装饰的非空行（频道标题几乎总在第一行，装饰行跳过）
+    for line in head.split("\n"):
+        if _decorative(line.strip()):
+            continue
+        cand = _clean(line.strip())
+        if cand and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", cand):
+            return cand
+    # ② 回退：按标点切分取最后有效段（装饰词都在前面，标题紧贴链接）
     parts = [p.strip() for p in re.split(r"[，,。；;\n\r\t]+", head) if p.strip()]
-    title = parts[-1] if parts else ""
-    # 只剥中式书名号/方括号装饰（「李熊猫」→ 李熊猫）；圆括号保留——
-    # 「遮天 (2023)」里的括号是年份内容，剥尾括号会破坏标题
-    title = re.sub(r"^[「『【【]+|[」』】】]+$", "", title).strip()
-    return title or text
+    for cand in reversed(parts):
+        cand = _clean(cand)
+        if cand and re.search(r"[\u4e00-\u9fffA-Za-z0-9]", cand):
+            return cand
+    return text
+
+
+def _rename_verified(client: GuangyaClient, file_id: str, target_name: str,
+                     parent_id: str) -> bool:
+    """改名 + 复核重试。
+
+    restore 刚完成时服务端副本元数据可能未稳定，rename 会静默丢失
+    （HTTP 成功但名字没变，实测发生在四骑士 18GB 文件夹上）。
+    改名后回头 list_dir 核对，未生效就重试，最多 3 轮。
+    """
+    for attempt in range(3):
+        try:
+            client.rename_file(file_id, target_name)
+        except GuangyaError as exc:
+            log.warning("分享产物改名请求失败（第 %d 次）: %s", attempt + 1, exc)
+            time.sleep(2)
+            continue
+        # 立即复核：大多数情况 rename 同步生效，命中即零等待
+        try:
+            cur = next((x.get("name") for x in client.list_dir(parent_id)
+                        if x.get("file_id") == file_id), None)
+        except GuangyaError:
+            cur = None
+        if cur == target_name:
+            return True
+        log.info("分享产物改名未生效（现名 %r），等待后重试第 %d 次", cur, attempt + 1)
+        time.sleep(2)  # 竞态：副本元数据未稳定，等一等再试
+    return False
 
 
 def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: set[str],
@@ -417,7 +476,9 @@ def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: s
                 # → 光鸭对同名 rename 会报错，直接视为已达标
                 log.info("分享条目名已符合规范命名，无需改名: %s", name_e)
                 return True
-            client.rename_file(e["file_id"], target_name)
+            if not _rename_verified(client, e["file_id"], target_name, parent_id):
+                log.warning("分享产物改名未生效，保持原名: %s", name_e)
+                return False
             # 单集文件 → 收进剧名文件夹（一部电视剧一个文件夹）
             if show_dir and ext:
                 show_id = _ensure_subdir(client, parent_id, show_dir)

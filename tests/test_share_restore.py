@@ -464,6 +464,37 @@ def test_extract_share_title_from_channel_text():
     assert t == "看这个", t
 
 
+def test_extract_share_title_real_channel_samples():
+    """2026-09 用户提供的真实频道消息 5 连发（追更状态词/栏目前缀/推广语紧贴链接）。"""
+    f = main._extract_share_title
+
+    # 标题在第一行 + emoji 紧贴链接（交锋 3 集版）
+    u1 = "https://www.guangyapan.com/s/1943656096944468049_ajCjfo_gmUmtFdm_"
+    t = f("交锋--首更至3集-4稍后--无任何广-4K\n🅶" + u1, u1)
+    assert t == "交锋--首更至3集-4稍后--无任何广-4K", t
+
+    # 栏目前缀 + 引导语，「链接：」在第二行
+    u2 = "https://www.guangyapan.com/s/1943660189867937815_ao69QsYgUWD6dlEw"
+    t = f("原盘影视：李小龙电影 复制链接到「光鸭APP」内观看和转存。\n链接：" + u2, u2)
+    assert t == "李小龙电影", t
+
+    # 栏目前缀 + 年份括号（括号是内容不可剥）
+    u3 = "https://www.guangyapan.com/s/1941755677691375666_ao69QsYgUWD6dlEw"
+    t = f("原盘影视：四骑士 (1972) 复制链接到「光鸭APP」内观看和转存。\n链接：" + u3, u3)
+    assert t == "四骑士 (1972)", t
+
+    # 追更状态词 + 「光鸭云盘」紧贴链接（推广语要剥）
+    u4 = "https://www.guangyapan.com/s/1942963024195588164_aeWXxmMH80b6bCME"
+    t = f("囧徒之预演告别 更10集 4KMAX画质 3G/集中文字幕 无广告 纯净 光鸭云盘" + u4, u4)
+    assert t == "囧徒之预演告别 更10集 4KMAX画质 3G/集中文字幕 无广告 纯净", t
+
+    # 标题提取终态：build_cn_filename 剥掉追更词后的命名（囧徒 S01E10 曾残留「中文」）
+    from core.naming import build_cn_filename
+    assert build_cn_filename(t) == "囧徒之预演告别.S01E10", t
+    assert build_cn_filename(f("交锋--首更至3集-4稍后--无任何广-4K\n🅶" + u1, u1)) == "交锋.S01E03"
+    assert build_cn_filename("四骑士 (1972)") == "四骑士.1972"
+
+
 def test_extract_share_title_fallbacks():
     f = main._extract_share_title
     u = "https://www.guangyapan.com/s/123_abc"
