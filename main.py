@@ -349,6 +349,34 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     return False, "", last_err, "error", rename_ok, cn_folder
 
 
+def _extract_share_title(text: str, url: str) -> str:
+    """从频道消息里抠分享标题（取链接之前最近的短语）。
+
+    频道消息的典型形态：「♥♥♥【国漫】装饰词♥♥♥\\n仙逆，链接：https://…」——
+    整条消息直接喂 build_cn_filename 会把装饰词全混进片名。策略：
+      1. 截取分享链接之前的文本；
+      2. 剥掉结尾的「链接：/地址：」引导词；
+      3. 按 ，,。；;/换行 切分取最后一段（装饰词都在前面，标题紧贴链接）；
+      4. 剥掉书名号/方括号等包裹装饰。
+    抠不出（空/纯装饰）时回退原文，ident 的噪声剥离兜底。
+    """
+    if not text or not url:
+        return text or ""
+    m = re.search(r"https?://\S*guangyapan\.com/(?:share|s)/", text, re.I)
+    if not m:
+        return text
+    head = text[:m.start()].strip()
+    if not head:
+        return text
+    head = re.sub(r"(链接|地址|直链)\s*[:：]\s*$", "", head).strip()
+    parts = [p.strip() for p in re.split(r"[，,。；;\n\r\t]+", head) if p.strip()]
+    title = parts[-1] if parts else ""
+    # 只剥中式书名号/方括号装饰（「李熊猫」→ 李熊猫）；圆括号保留——
+    # 「遮天 (2023)」里的括号是年份内容，剥尾括号会破坏标题
+    title = re.sub(r"^[「『【【]+|[」』】】]+$", "", title).strip()
+    return title or text
+
+
 def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: set[str],
                             new_count: int, cn_folder: str, show_dir: str = "") -> bool:
     """分享转存后的中文命名收纳（分门别类落盘的"命名"半边）。
@@ -384,6 +412,11 @@ def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: s
             if e.get("res_type") == 1 and "." in name_e:
                 ext = name_e.rsplit(".", 1)[1]
             target_name = f"{cn_folder}.{ext}" if ext else cn_folder
+            if _entry_key(name_e) == _entry_key(target_name):
+                # 分享条目名已与规范名一致（如「李熊猫」分享 → 目标名也是李熊猫）
+                # → 光鸭对同名 rename 会报错，直接视为已达标
+                log.info("分享条目名已符合规范命名，无需改名: %s", name_e)
+                return True
             client.rename_file(e["file_id"], target_name)
             # 单集文件 → 收进剧名文件夹（一部电视剧一个文件夹）
             if show_dir and ext:
@@ -403,6 +436,11 @@ def _organize_share_entries(client: GuangyaClient, parent_id: str, before_ids: s
         sub_id = _ensure_subdir(client, parent_id, folder_name)
         moved = 0
         for e in new_entries:
+            if e.get("file_id") == sub_id:
+                # 分享根里恰好有与目标同名的文件夹（_ensure_subdir 找到的就是它），
+                # move 自己进自己会被光鸭拒绝 → 跳过
+                moved += 1
+                continue
             try:
                 client.move_file(e["file_id"], sub_id)
                 moved += 1
@@ -426,12 +464,14 @@ def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
     if not parsed:
         return False, "", "不是光鸭分享链接", "error", None, ""
     share_id = parsed["share_id"]
-    cn_folder = build_cn_filename(cn_title) if cn_title else ""
+    # 频道消息 = 装饰词 + 标题 + 链接 → 先抠出标题再命名（装饰词不混进片名）
+    title = _extract_share_title(cn_title, url) if cn_title else ""
+    cn_folder = build_cn_filename(title) if title else ""
     show_dir = ""
-    if cn_title:
+    if title:
         try:
-            cand = show_folder(cn_title)
-            info = analyze(cn_title)
+            cand = show_folder(title)
+            info = analyze(title)
             if info.sig and cand and cand != cn_folder:
                 show_dir = cand
         except Exception:  # noqa: BLE001 - 剧名文件夹算不出不影响主流程

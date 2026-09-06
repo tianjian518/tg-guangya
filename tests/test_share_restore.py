@@ -432,6 +432,47 @@ def test_submit_share_unparsable_title_fallback_name():
 # handler 分流：分享链接走进分享链路（不进 create_offline_task）
 # ======================================================================
 
+def test_extract_share_title_from_channel_text():
+    """频道消息 = 装饰词 + 标题 + 链接 → 只取链接前最近短语做标题。"""
+    f = main._extract_share_title
+    u = "https://www.guangyapan.com/s/1943524207843811387_adyP1Y8EdLN_2AaC"
+
+    # 真实频道形态：装饰词 + 换行 + 标题，链接：URL
+    t = f("♥♥♥♥♥【国漫】【持续更新，敬请收藏】♥♥♥♥♥\n仙逆，链接：" + u, u)
+    assert t == "仙逆", t
+
+    t = f("「李熊猫」，链接：" + u, u)
+    assert t == "李熊猫", t
+
+    t = f("「遮天 (2023)」，链接：" + u, u)
+    assert t == "遮天 (2023)", t
+
+    # 无装饰词直接发（bot /add 场景）
+    t = f("李熊猫 " + u, u)
+    assert t == "李熊猫", t
+
+    # 带空格的长标题（空格不是分隔符）
+    t = f("指环王 三部曲 加长版 4K原盘REMUX，链接：" + u, u)
+    assert t == "指环王 三部曲 加长版 4K原盘REMUX", t
+
+    # 书名号嵌套英文名
+    t = f("DC 系列电影蓝光原盘，链接：" + u, u)
+    assert t == "DC 系列电影蓝光原盘", t
+
+    # 链接在文本中间 / 纯装饰词兜底原文
+    t = f("看这个 " + u + " 拿走不谢", u)
+    assert t == "看这个", t
+
+
+def test_extract_share_title_fallbacks():
+    f = main._extract_share_title
+    u = "https://www.guangyapan.com/s/123_abc"
+    assert f("", u) == ""
+    assert f("没有链接的普通文本", u) == "没有链接的普通文本"
+    # 标题就是链接本身 → 兜底原文
+    assert f(u, u) == u
+
+
 def test_handler_routes_share_links():
     sim = ShareSim({"r1": {"entries": [
         {"name": "Avatar.2009.mkv", "res_type": 1},
