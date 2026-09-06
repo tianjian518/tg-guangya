@@ -108,7 +108,11 @@ _TECH = re.compile(
     r"|\b(blu[- ]?ray|bluray|bdrip|brrip|web[- ]?dl|webrip|webdl|remux|hdtv|hdrip|"
     r"dvdrip|dvdr|h\.?264|h\.?265|x\.?264|x\.?265|hevc|avc|mpeg|yuv420p)\b"
     r"|\b(remastered|restored|imax|hdr(?:10)?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
-    r"truehd|ac3|aac|flac|lpcm|[1-9]\.[01]|10bit|8bit)\b"
+    r"truehd|ac3|aac|flac|lpcm|[1-9]\.[01])\b"
+    # 色深：8bit/10bit/12bit，分隔写法 10-bit / 10 bit / 10.bit 也要吃掉（实测
+    # 「早春晴朗…10-bit…」曾把「10」残留进片名 → 早春晴朗10）。
+    # 注意 _TECH 先于 _SEP 执行，此时连字符还在，分隔符必须含 [-.]
+    r"|\b\d{1,2}[-.\s]?bit\b"
     # 帧率与平台标记：24fps/60fps、iq(iqiyi 国际站)/iqiyi/youku 等常粘在片名后
     r"|\b\d{2,3}\s*fps\b|\biq(?:iyi)?\b|\byouku\b|\bwebkit\b"
     # DTS 家族整体匹配（含可选 MA 后缀）。必须放在所有短分支之前：
@@ -135,7 +139,7 @@ _NOISE_WORDS = re.compile(
     r"迅雷|百度|夸克|阿里|网盘|磁力|种子|下载|资源|高清修复|"
     r"原版|双音|原音|原声|国语|韩语|日语|英语|配音|Dubbed|DUBBED|Lion|Mandarin|"
     r"web[- ]?dl|webrip|bdrip|brrip|remux|hdtv|hdrip|dvdrip|bluray|blu[- ]?ray|"
-    r"h264|h265|x264|x265|hevc|avc|yuv420p|10bit|8bit)",
+    r"h264|h265|x264|x265|hevc|avc|yuv420p|\d{1,2}\s*bit)",
     re.I,
 )
 
