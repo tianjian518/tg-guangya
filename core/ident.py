@@ -104,9 +104,12 @@ def _strip_year(s: str) -> tuple[str, int]:
 # 分辨率 / 编码 / 封装 / 画质音轨（剥掉，不参与身份）
 _TECH = re.compile(
     r"(?i)"
-    r"\b(2160p|1440p|1080p|1080i|720p|480p|360p|4k|8k|uhd|fhd|hd|sdr)\b"
+    # 分辨率可无分隔粘连编码（2160pH.265）；尾边界用「非字母」而非 \b——
+    # 否则 2160p 后紧跟 H、H.265 后紧跟数字时整段漏剥（实测「2160pH.26515.78 GB」）
+    r"\b(2160p|1440p|1080p|1080i|720p|480p|360p|4k|8k|uhd|fhd|hd|sdr)"
+    r"(?:[-. ]?(?:h\.?26[45]|x\.?26[45]|hevc|avc))?(?![a-zA-Z])"
     r"|\b(blu[- ]?ray|bluray|bdrip|brrip|web[- ]?dl|webrip|webdl|remux|hdtv|hdrip|"
-    r"dvdrip|dvdr|h\.?264|h\.?265|x\.?264|x\.?265|hevc|avc|mpeg|yuv420p)\b"
+    r"dvdrip|dvdr|h\.?264|h\.?265|x\.?264|x\.?265|hevc|avc|mpeg|yuv420p)(?![a-zA-Z])"
     r"|\b(remastered|restored|imax|hdr(?:10)?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
     r"truehd|ac3|aac|flac|lpcm|[1-9]\.[01])\b"
     # 色深：8bit/10bit/12bit，分隔写法 10-bit / 10 bit / 10.bit 也要吃掉（实测
@@ -462,6 +465,10 @@ def analyze(title: str) -> ResourceInfo:
         if translated:
             info.core = translated
             translated_from_en = True
+    else:
+        # 中文译名：不翻译，但可能是外语片（如《耳语人》是美国片）。
+        # 按中文名查 TMDB 拿 original_language 折算地区，否则会误判华语。
+        meta_region = media_meta.region_of(info.core, info.year)
     # 中文片名为主时，丢掉夹带的英文（不同频道常写不同译名/写不写英文，会破坏账本一致性）。
     # 注意只丢字母、不动数字：流浪地球2TheWandering... 粘连时 2 是片名一部分；
     # 技术参数（IQ24 / 24fps）由 _TECH 整词剥除，不走这里。

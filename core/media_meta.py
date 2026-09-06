@@ -1780,6 +1780,21 @@ def lookup(title: str, year: int = 0) -> MediaMeta:
         return MediaMeta(**out)
 
 
+def region_of(title: str, year: int = 0) -> str:
+    """查一条片名（常是中文译名）的地区码，不翻译。
+
+    用于「中文译名 → 外语片」的纠正：像《耳语人》是中文译名、TMDB 标
+    original_language=en，应当分进欧美电影而非华语电影。无 TMDB key 时返回
+    空串，调用方回退到「原文有中文 → 华语」兜底。
+    """
+    if not title or not _tmdb_key():
+        return ""
+    tm = _tmdb_lookup(title, year)
+    if tm:
+        return language_to_region(tm.get("original_language", ""))
+    return ""
+
+
 def translate(title: str, year: int = 0) -> str:
     """只要译名。查不到返回空串（调用方应保留英文原名）。"""
     return lookup(title, year).cn_name

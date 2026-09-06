@@ -94,8 +94,41 @@ def test_chinese_title_always_cn():
         _check(title, "cn")
 
 
+def test_chinese_title_tmdb_region():
+    """中文译名（无夹带英文原名）应按 TMDB 的 original_language 判定地区，
+    而非一律弱判华语。复现「耳语人 (2026) 落进华语电影」缺陷。
+
+    用 mock 模拟 TMDB 命中，验证 ident 的中文 core 现在也会去查地区。
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from unittest import mock
+
+    from core import media_meta as mm
+    from core.ident import analyze
+
+    print("\n=== 中文译名经 TMDB 地区识别（非一律华语）===")
+    table = {"耳语人": "en", "名侦探柯南": "ja", "霸王别姬": "zh"}
+    def fake_lookup(q, year=0):
+        lang = table.get(q)
+        return {"original_language": lang} if lang else None
+
+    with mock.patch.object(mm, "_tmdb_key", lambda: "fake-key"), \
+         mock.patch.object(mm, "_tmdb_lookup", fake_lookup):
+        assert analyze("耳语人 (2026)").region_hint == "west", "美国片译名应判 west"
+        assert analyze("名侦探柯南 (1997)").region_hint == "jpkr", "日本片译名应判 jpkr"
+        assert analyze("霸王别姬 (1993)").region_hint == "cn", "华语片译名应判 cn"
+    # 不在 TMDB 表里（查不到）时回退弱判华语
+    assert analyze("耳语人 (2026)").region_hint == "cn", "无 TMDB 命中应回退 cn"
+    # 中文译名本身不应被改写
+    assert analyze("耳语人 (2026)").core == "耳语人"
+    print("  OK 耳语人→west / 名侦探柯南→jpkr / 霸王别姬→cn / 查不到→cn")
+
+
 if __name__ == "__main__":
     test_phrase_region_cn()
     test_phrase_region_jpkr()
     test_chinese_title_always_cn()
+    test_chinese_title_tmdb_region()
     print("\n==== 短语地区识别：全部通过 ✅")

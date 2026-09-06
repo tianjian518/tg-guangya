@@ -75,9 +75,35 @@ def test_english_patient_not_damaged():
     print(f"  OK The English Patient → {got!r}（未被破坏）")
 
 
+def test_resolution_codec_glued_no_boundary():
+    print("\n=== 分辨率与编码无分隔粘连（词边界失效场景）===")
+    # 复现「耳语人 (2026) 2160pH.26515.78 GB」：2160p 后直接跟 H.265，
+    # H.265 后直接跟体积数字，因 \b 在两字母/数字间不存在而整段漏剥。
+    # 中文标题做精确断言；英文标题只验证技术 token 被剥离（译名随字典变化，不硬编码）。
+    exact = {
+        "耳语人 (2026) 2160pH.26515.78 GB": "耳语人.2026",
+        "英雄 2026 2160pH265 12.3GB": "英雄.2026",
+    }
+    for raw, folder in exact.items():
+        got = analyze(raw).folder
+        assert got == folder, f"analyze({raw!r}).folder = {got!r}，期望 {folder!r}"
+        print(f"  OK {raw:<40} → {got!r}")
+    tech = [
+        "Cold.War.1994.2026.2160p.60FPS.H.265",
+        "RandomTitleXYZ.2023.2160p.HDR.WEB-DL.x265.10bit",
+    ]
+    for raw in tech:
+        f = analyze(raw).folder
+        banned = ("2160p", "60FPS", "H.265", "x265", "HDR", "10bit", "WEB-DL")
+        leaked = [b for b in banned if b in f]
+        assert not leaked, f"analyze({raw!r}).folder = {f!r} 残留技术词 {leaked}"
+        print(f"  OK {raw:<40} → 技术词已剥离（{f!r}）")
+
+
 if __name__ == "__main__":
     test_release_group_stripped()
     test_all_years_stripped()
     test_camel_fallback()
     test_english_patient_not_damaged()
+    test_resolution_codec_glued_no_boundary()
     print("\n==== 噪声剥离：全部通过 ✅")
