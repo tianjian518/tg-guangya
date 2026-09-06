@@ -25,6 +25,13 @@ jobs:
           grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
           grab apibay_query.json      "https://apibay.org/q.php?q=interstellar&cat=0"
           ls -la samples/
+      - name: Dump samples into run log (base64)
+        run: |
+          for f in samples/*; do
+            echo "====BEGIN $(basename "$f") $(wc -c < "$f") bytes===="
+            base64 -w 400 "$f"
+            echo "====END $(basename "$f")===="
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: search-samples
