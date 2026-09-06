@@ -415,17 +415,43 @@ def test_submit_share_not_share_url():
     assert not ok and "不是光鸭分享链接" in name
 
 
-def test_submit_share_unparsable_title_fallback_name():
-    # 标题解析不出有效片名 → build_cn_filename 兜底为「影视资源」，
-    # 产物仍按兜底规范名改名（不保留英文原名）
+def test_submit_share_unparsable_title_uses_real_name():
+    # 标题无法解析（只有 emoji）时，命名主源退化为分享真实文件名（不再依赖标题兜底）
     sim = ShareSim({"raw1": {"entries": [
         {"name": "Some.Show.S01E01.mp4", "res_type": 1},
     ]}})
     ok, task_id, name, status, rename_ok, cn_folder = _run_share(
         "https://www.guangyapan.com/share/raw1", sim, "🔥🔥🔥")
     assert ok and status == "done" and rename_ok is True, (ok, status, rename_ok)
-    assert cn_folder == "影视资源", cn_folder
-    assert "影视资源.mp4" in sim.dirs["cat-dir"], sim.dirs["cat-dir"]
+    # 命名主源 = 真实名（Some.Show.S01E01.mp4 → SomeShow.S01E01），与无效标题 🔥🔥🔥 无关
+    assert cn_folder == "SomeShow.S01E01", cn_folder
+    assert rename_ok is True
+    # 原始名经 _entry_key 归一化（点被忽略）后等价于规范名 → 视为已达标、保留原名（合理行为）
+    assert ("Some.Show.S01E01.mp4" in sim.dirs["cat-dir"]
+            or any(n.startswith("SomeShow.S01E01") for n in sim.dirs["cat-dir"])), sim.dirs["cat-dir"]
+
+
+def test_submit_share_names_from_share_real_name():
+    # 核心纠正（2026-09）：命名主源 = 分享里的真实文件名，发帖标题只辅助。
+    # 真实名是中文且含营销词 → 用它规范化；发帖标题再离谱也不参与命名。
+    sim = ShareSim({"real1": {"entries": [
+        {"name": "小猪佩奇标准命名 全12季", "res_type": 2, "size": 0},
+    ]}})
+    ok, task_id, name, status, rename_ok, cn_folder = _run_share(
+        "https://www.guangyapan.com/share/real1", sim, "🔥🔥随便什么垃圾标题全季合集🔥")
+    assert ok and rename_ok is True, (ok, rename_ok)
+    assert cn_folder == "小猪佩奇.S01-S12", cn_folder
+
+
+def test_submit_share_real_name_en_title_cn_fallback():
+    # 真实名是英文压制组命名、标题带中文译名 → 用标题中文规范名（链接里是英文名）
+    sim = ShareSim({"real2": {"entries": [
+        {"name": "Peppa.Pig.S01-S12.2160p.mkv", "res_type": 1, "size": 0},
+    ]}})
+    ok, task_id, name, status, rename_ok, cn_folder = _run_share(
+        "https://www.guangyapan.com/share/real2", sim, "小猪佩奇 (2004)")
+    assert ok and rename_ok is True, (ok, rename_ok)
+    assert cn_folder == "小猪佩奇.2004.S01-S12", cn_folder
 
 
 # ======================================================================

@@ -525,18 +525,9 @@ def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
     if not parsed:
         return False, "", "不是光鸭分享链接", "error", None, ""
     share_id = parsed["share_id"]
-    # 频道消息 = 装饰词 + 标题 + 链接 → 先抠出标题再命名（装饰词不混进片名）
+    # 发帖标题只作辅助（补年份 / 判断剧集），命名主源是分享链接里的真实文件名
     title = _extract_share_title(cn_title, url) if cn_title else ""
-    cn_folder = build_cn_filename(title) if title else ""
-    show_dir = ""
-    if title:
-        try:
-            cand = show_folder(title)
-            info = analyze(title)
-            if info.sig and cand and cand != cn_folder:
-                show_dir = cand
-        except Exception:  # noqa: BLE001 - 剧名文件夹算不出不影响主流程
-            show_dir = ""
+    cn_folder = ""  # 早期失败分支（转存尚未成功）返回空命名，供调用方判空
 
     try:
         before_ids = {e.get("file_id") for e in client.list_dir(parent_id)}
@@ -558,7 +549,46 @@ def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
 
     if not res.get("ok"):
         log.warning("分享转存未完成 %s: %s", share_id, res.get("message"))
-        return False, res.get("task_id", ""), res.get("message") or "转存失败", "error", None, cn_folder
+        return False, res.get("task_id", ""), res.get("message") or "转存失败", "error", None, ""
+
+    # 命名主源 = 分享链接里的真实文件名（链接内文件名才是片名权威来源）；
+    # 发帖标题仅辅助（真实名缺年份时用标题里的年份补全、剧集文件夹判定）。
+    entries = res.get("entries") or []
+    share_names = [e.get("name", "") for e in entries if e.get("name")]
+    primary = share_names[0] if share_names else title
+    cn_folder = build_cn_filename(primary) if primary else ""
+    # 辅助①：真实名是纯英文（压制组命名，如 Summer.2026.S01E04）/ 无中文，而发帖
+    # 标题带中文译名 → 用标题的中文规范名（链接里是英文名，频道标题才是中文译名）。
+    # 真实名本身含中文（如「小猪佩奇标准命名 全12季」）则直接用真实名，标题不参与。
+    if primary and not re.search(r"[一-鿿]", primary) and title and re.search(r"[一-鿿]", title):
+        t_folder = build_cn_filename(title)
+        if t_folder and re.search(r"[一-鿿]", t_folder):
+            # 真实名常带季数签名（S01-S12 / S02），标题可能没有 → 从真实名补回季数
+            sig = re.search(r"\.(s\d{1,2}(?:e\d{1,3})?(?:-s\d{1,2})?)\b", primary, re.I)
+            if sig and sig.group(1).lower() not in t_folder.lower():
+                t_folder = f"{t_folder}.{sig.group(1)}"
+            cn_folder = t_folder
+    # 辅助②：命名缺年份时，拿标题里的年份补上（如「小猪佩奇.S01-S12」+「(2004)」
+    # → 小猪佩奇.2004.S01-S12）；整季范围（X.S01-SNN）则把年份插到片名与范围之间。
+    if cn_folder and title:
+        m = re.search(r"\(?(\d{4})\)?", title)
+        if m and m.group(1) not in cn_folder:
+            yr = m.group(1)
+            # 单集/单季签名（.SxxExx / .Sxx 词尾）：年份归剧名文件夹，文件名不再塞年份；
+            # 仅整季范围（.S01-S12）保留年份（小猪佩奇.2004.S01-S12）。
+            if not re.search(r"\.s0?\d(?:e0?\d)?$", cn_folder, re.I):
+                rng = re.match(r"^(.+?)\.(s0?\d-s0?\d)$", cn_folder, re.I)
+                cn_folder = f"{rng.group(1)}.{yr}.{rng.group(2)}" if rng else f"{cn_folder}.{yr}"
+    show_dir = ""
+    if primary or title:
+        try:
+            src = title or primary
+            cand = show_folder(src)
+            info = analyze(src)
+            if info.sig and cand and cand != cn_folder:
+                show_dir = cand
+        except Exception:  # noqa: BLE001 - 剧名文件夹算不出不影响主流程
+            show_dir = ""
 
     # 转存落盘成功 → 中文命名 + 剧集收纳（失败不回滚，只降级为保留分享原名）
     rename_ok: bool | None = None

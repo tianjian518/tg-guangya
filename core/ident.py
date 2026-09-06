@@ -139,6 +139,8 @@ _NOISE_WORDS = re.compile(
     r"未删减|加长版|导演剪辑版|终极版|完整版|无水印|官方|预告|花絮|合集|特别篇|番外|"
     r"音轨|声轨|多音轨|双音轨|国粤双语|硬字幕|软字幕|特效字幕|内封字幕|"
     r"修复版|重制版|国漫|动漫|经典|独家|首发|限时|免费|会员|"
+    # 资源发布者的「整理标签」虚荣词（光鸭分享真实文件名常见，如「小猪佩奇标准命名 全12季」）
+    r"标准命名|标准整理|已整理|精心整理|精品整理|整理版|修复整理|完美整理|"
     r"迅雷|百度|夸克|阿里|网盘|磁力|种子|下载|资源|高清修复|"
     r"原版|双音|原音|原声|国语|韩语|日语|英语|配音|Dubbed|DUBBED|Lion|Mandarin|"
     r"web[- ]?dl|webrip|bdrip|brrip|remux|hdtv|hdrip|dvdrip|bluray|blu[- ]?ray|"
@@ -175,6 +177,7 @@ _SXXEXX = re.compile(r"(?i)\bs(\d{1,2})\s*[-_. ]?\s*e(\d{1,3})\b")           # S
 _SEASON_FULL_CN = re.compile(r"第\s*([0-9一二两三四五六七八九十]+)\s*季")      # 第X季
 _SEASON_FULL_EN = re.compile(r"(?i)\bseason\s*(\d{1,2})\b")                   # Season 2
 _SEASON_BARE = re.compile(r"(?i)(?<![a-z0-9])s(\d{1,2})(?![a-z0-9])")          # S03（季包，无集号）
+_SEASON_RANGE_CN = re.compile(r"全\s*([0-9一二两三四五六七八九十]+)\s*季")   # 全12季（整季包范围 → S01-S12）
 _EP_CN = re.compile(r"第\s*([0-9一二两三四五六七八九十]+)\s*[集话話期]")        # 第X集/话/期
 _EP_CN_BARE = re.compile(r"(?<![\d.])(\d{1,3})\s*[集话話期](?![\d.])")         # 18集（兜底）
 _EP_EN = re.compile(r"(?i)\bep\.?\s*(\d{1,3})\b")                              # EP06
@@ -415,6 +418,7 @@ def analyze(title: str) -> ResourceInfo:
             info.sig = f"s{int(m.group(1)):02d}e{int(m.group(2)):02d}"
         else:
             season = None
+            season_range = None
             mc = _SEASON_FULL_CN.search(raw)
             if mc:
                 season = _cn_int(mc.group(1))
@@ -426,6 +430,10 @@ def analyze(title: str) -> ResourceInfo:
                     msb = _SEASON_BARE.search(raw)
                     if msb:
                         season = int(msb.group(1))
+                    else:
+                        mfr = _SEASON_RANGE_CN.search(raw)
+                        if mfr:
+                            season_range = _cn_int(mfr.group(1))
             ep = None
             mec = _EP_CN.search(raw)
             if mec:
@@ -440,6 +448,8 @@ def analyze(title: str) -> ResourceInfo:
                         ep = int(meb.group(1))
             if ep is not None:
                 info.sig = f"s{(season or 1):02d}e{int(ep):02d}"
+            elif season_range is not None:
+                info.sig = f"s01-s{season_range:02d}"   # 整季包范围（全12季 → S01-S12）
             elif season is not None:
                 info.sig = f"s{season:02d}"   # 季包（Season 2 / 第2季，无集号）
 
