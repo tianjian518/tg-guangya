@@ -89,6 +89,18 @@ class CloudSim:
                     return
         raise AssertionError(f"delete: file_id {file_id} 不存在")
 
+    def move_file(self, file_id: str, target_parent_id: str) -> None:
+        """移动文件/文件夹到目标目录（真实接口 /userres/v1/file/move_file）。"""
+        if target_parent_id not in self.dirs:
+            raise AssertionError(f"move: 目标目录 {target_parent_id} 不存在")
+        for entries in self.dirs.values():
+            for name, (fid, rt) in list(entries.items()):
+                if fid == file_id:
+                    del entries[name]
+                    self.dirs.setdefault(target_parent_id, {})[name] = (fid, rt)
+                    return
+        raise AssertionError(f"move: file_id {file_id} 不存在")
+
     # ---------- 离线任务 ----------
     def resolve(self, url: str) -> dict:
         name = self.url_map.get(url) or url.rsplit("/", 1)[-1] or "unknown"
@@ -272,10 +284,64 @@ def test_timeout_task_completed_by_monitor():
     print("  OK 超时任务 → 监控补改名 → 华语电影/冷战.1994（香港片，region=cn 正确）")
 
 
+def test_episode_files_collected_into_show_folder():
+    print("\n=== 场景6 剧集单集直链 → 收进剧名文件夹（一部剧一个文件夹）===")
+    u1 = "https://dl.example.com/XiaJi.2026.S01E04.2160p.IQiyi.WEB-DL.mkv"
+    en1 = "XiaJi.2026.S01E04.2160p.IQiyi.WEB-DL.mkv"
+    handler, client, store = build_world(url_map={u1: en1}, file_urls={u1})
+    handler(Msg(f"夏季.2026.S01E04.第4集.2160p.IQ.WEB-DL.H.265.mkv {u1}", [u1], message_id="m6"))
+    tv_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "国产剧")
+    tv_names = [e["name"] for e in client.list_dir(tv_dir)]
+    assert "夏季.2026" in tv_names, f"国产剧下应有剧名文件夹，实际 {tv_names}"
+    assert en1 not in tv_names, "单集文件不应平铺在分类目录"
+    show_id = next(e["file_id"] for e in client.list_dir(tv_dir) if e["name"] == "夏季.2026")
+    inner = [e["name"] for e in client.list_dir(show_id)]
+    assert "夏季.S01E04.mkv" in inner, f"剧名文件夹里应有改名后的单集，实际 {inner}"
+    print("  OK 单集 → 国产剧/夏季.2026/夏季.S01E04.mkv")
+
+
+def test_episode_second_ep_lands_same_folder():
+    print("\n=== 场景7 同剧第二集 → 落进同一个剧名文件夹 ===")
+    u1 = "https://dl.example.com/XiaJi.2026.S01E04.2160p.IQiyi.WEB-DL.mkv"
+    u2 = "https://dl.example.com/XiaJi.2026.S01E05.2160p.IQiyi.WEB-DL.mkv"
+    handler, client, store = build_world(
+        url_map={u1: "XiaJi.2026.S01E04.2160p.IQiyi.WEB-DL.mkv",
+                 u2: "XiaJi.2026.S01E05.2160p.IQiyi.WEB-DL.mkv"},
+        file_urls={u1, u2})
+    handler(Msg("夏季.2026.S01E04.第4集 2160p " + u1, [u1], message_id="m7a"))
+    handler(Msg("夏季.2026.S01E05.第5集 2160p " + u2, [u2], message_id="m7b"))
+    tv_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "国产剧")
+    show_dirs = [e for e in client.list_dir(tv_dir) if e["res_type"] == 2]
+    assert len(show_dirs) == 1, f"同一部剧只应有 1 个剧名文件夹，实际 {len(show_dirs)}"
+    inner = sorted(e["name"] for e in client.list_dir(show_dirs[0]["file_id"]))
+    assert inner == ["夏季.S01E04.mkv", "夏季.S01E05.mkv"], f"两集都应收进同一文件夹，实际 {inner}"
+    recs = store.history(limit=10)
+    assert all(r.renamed == 1 for r in recs), "两集都应改名成功"
+    print("  OK S01E04+S01E05 → 国产剧/夏季.2026/ 下两个文件")
+
+
+def test_bt_season_pack_stays_one_folder():
+    print("\n=== 场景8 BT整季包 → 文件夹产物改名即自成剧文件夹（不套两层）===")
+    url = "magnet:?xt=urn:btih:EEEE5555QINGYUNIAN"
+    en = "QingYuNian.S02.2160p.WEB-DL.H265"
+    handler, client, store = build_world(url_map={url: en})
+    handler(Msg(f"庆余年 第二季 全季 2160p {url}", [url], message_id="m8"))
+    tv_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "国产剧")
+    entries = client.list_dir(tv_dir)
+    dirs = [e["name"] for e in entries if e["res_type"] == 2]
+    files = [e["name"] for e in entries if e["res_type"] == 1]
+    assert "庆余年.S02" in dirs, f"整季包应改名成剧文件夹留在分类目录，实际 {dirs}"
+    assert not files, "不应有平铺文件"
+    print("  OK 整季包 → 国产剧/庆余年.S02/（一部剧一个文件夹）")
+
+
 if __name__ == "__main__":
     test_bt_folder_renamed_to_cn()
     test_dedup_skips_same_title()
     test_single_file_artifact_renamed_with_ext()
     test_chinese_title_goes_cn_category()
     test_timeout_task_completed_by_monitor()
+    test_episode_files_collected_into_show_folder()
+    test_episode_second_ep_lands_same_folder()
+    test_bt_season_pack_stays_one_folder()
     print("\n==== 全链路端到端：全部通过 ✅")

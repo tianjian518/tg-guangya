@@ -35,7 +35,7 @@ from core.data_dir import resolve_config_path, get_data_dir, resolve_rel
 from core.classifier import Classifier
 from core.organizer import CategoryResolver
 from core.dedup import CloudDedup, quality_score
-from core.ident import analyze
+from core.ident import analyze, show_folder
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,10 +73,35 @@ def _norm(s: str) -> str:
 
     用于把「种子英文原名」和「云端实际文件夹名」拉到同一标准比对——
     两者常只差 .torrent / .mp4 后缀、或 WEB-DL 之类的额外尾巴。
+    ⚠️ 只可用于「同一资源的两个写法」对位比对（orig_name ↔ 产物名），
+    不可用于「目标中文名 vs 目录内任意条目」——rsplit 会把「夏季.2026」
+    和「夏季.S01E05」都退化成「夏季」，造成跨条目误判（历史 bug）。
     """
     s = (s or "").strip().lower()
     base = s.rsplit(".", 1)[0] if "." in s else s
     return re.sub(r"[^0-9a-z一-鿿]", "", base)
+
+
+# 视频/种子扩展名：只用于「条目名去扩展名」，不碰名字中段的点（如 夏季.2026）
+_VIDEO_EXT_RE = re.compile(
+    r"\.(mkv|mp4|avi|ts|rmvb|rm|iso|mov|wmv|flv|m2ts|torrent)$", re.I)
+
+
+def _norm_full(s: str) -> str:
+    """全量归一化：lower + 只留字母数字中文，【不砍】名字尾部的点段。
+
+    「夏季.2026」→ 夏季2026、「夏季.S01E05」→ 夏季s01e05：两者必须可区分。
+    凡是拿「目标中文名」去比对目录内任意条目，都必须用这一套（_entry_key）。
+    """
+    return re.sub(r"[^0-9a-z一-鿿]", "", (s or "").strip().lower())
+
+
+def _entry_key(name: str) -> str:
+    """云端条目的比对键：先去视频扩展名，再全量归一化。
+
+    文件夹名原样（无扩展名可去）；单集文件去掉 .mkv 等尾巴后与 cn_folder 同规。
+    """
+    return _norm_full(_VIDEO_EXT_RE.sub("", name or ""))
 
 
 def _record_ledger(store: Store, text: str, category: str = "") -> None:
@@ -136,14 +161,30 @@ def backfill_title_ledger(store: Store) -> int:
     return added
 
 
+def _ensure_subdir(client: GuangyaClient, parent_id: str, name: str) -> str:
+    """在 parent_id 下找名为 name 的子目录，没有则创建。返回其 fileId。"""
+    try:
+        for e in client.list_dir(parent_id):
+            if e.get("res_type") == 2 and (e.get("name") or "").strip() == name:
+                return e.get("file_id") or ""
+    except GuangyaError:
+        pass
+    return client.create_folder(parent_id, name)
+
+
 def _rename_artifact_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
-                           parent_id: str, cn_folder: str) -> bool:
+                           parent_id: str, cn_folder: str, show_dir: str = "") -> bool:
     """把离线下载产物（外层文件夹或单文件）重命名为中文名。返回 True 表示已处理。
 
     产物有两种形态（均来自真实网盘观察，2026-09）：
       - BT 磁力 → 文件夹（res_type=2），名字为种子名，无扩展名
       - HTTP 直链 / 单文件种子 → 单个文件（res_type=1），名字带 .mkv 等扩展名
     对文件改名时保留原扩展名（如 测试电影.2024.mkv），否则光鸭可能不识别媒体类型。
+
+    剧集收纳（show_dir 非空时）：一部电视剧一个文件夹。单集文件改名后
+    move 进 分类目录/show_dir/（如 国产剧/夏季.2026/夏季.S01E04.mkv），
+    避免不同剧集的单集在分类目录里平铺混在一起。show_dir 不存在会自动创建。
+    BT 整包本来就是文件夹，改完名即自成一部剧的文件夹，无需 move。
 
     定位产物有两条路（关键是第 ② 条兜底）：
       ① 用离线任务返回的 fileId（并校验它确实是目标目录下的产物）
@@ -161,8 +202,11 @@ def _rename_artifact_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
         return False
     artifacts = [e for e in entries if e.get("res_type") in (1, 2)]
 
-    # 已经是中文名 → 无需再动（_norm 抹平扩展名，文件夹/文件统一比对）
-    if any(_norm(e.get("name")) == _norm(cn_folder) for e in artifacts):
+    # 已经是中文名 → 无需再动。必须用「不砍尾巴」的 _entry_key 比对：
+    # 用 _norm 会把「夏季.2026」（目录里已有的剧名文件夹）和「夏季.S01E05」
+    # （本集目标名）都退化成「夏季」→ 误判为本集已处理 → 改名+收纳全被跳过，
+    # 第二集永远进不了剧名文件夹（场景7 bug）。
+    if any(_entry_key(e.get("name")) == _norm_full(cn_folder) for e in artifacts):
         log.info("产物已是中文名（创建时即生效）: %s", cn_folder)
         return True
 
@@ -218,12 +262,27 @@ def _rename_artifact_to_cn(client: GuangyaClient, task_id: str, orig_name: str,
         entries = client.list_dir(parent_id)
     except GuangyaError:
         entries = []
-    if any(_norm(e.get("name")) == _norm(target_name)
-           and e.get("file_id") == fid for e in entries if e.get("res_type") in (1, 2)):
-        log.info("产物已重命名为中文: %s", target_name)
-        return True
-    log.warning("改名后校验失败：目录中未找到 %s，保持英文原名", target_name)
-    return False
+    if not any(_entry_key(e.get("name")) == _entry_key(target_name)
+               and e.get("file_id") == fid for e in entries if e.get("res_type") in (1, 2)):
+        log.warning("改名后校验失败：目录中未找到 %s，保持英文原名", target_name)
+        return False
+
+    # 剧集收纳：单集文件 → move 进剧名文件夹（一部电视剧一个文件夹）
+    if show_dir and ext:  # ext 非空 ⇔ 产物是单文件（文件夹产物 ext=""）
+        try:
+            show_id = _ensure_subdir(client, parent_id, show_dir)
+            client.move_file(fid, show_id)
+            inner = [e.get("name") for e in client.list_dir(show_id)]
+            if target_name in inner:
+                log.info("单集已收进剧名文件夹: %s/%s", show_dir, target_name)
+                return True
+            log.warning("移入剧名文件夹后校验失败（%s 未出现在 %s）", target_name, show_dir)
+            return False
+        except GuangyaError as exc:
+            log.warning("剧集收纳失败（文件留在分类目录）: %s", exc)
+            return True  # 改名已生效，仅收纳失败，不算整体失败
+    log.info("产物已重命名为中文: %s", target_name)
+    return True
 
 
 def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int,
@@ -239,6 +298,16 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     rename_ok: bool | None = None
     # 中文文件夹名（不带文件后缀）：创建时先尝试指定，完成后再校验 + rename 兜底
     cn_folder = build_cn_filename(cn_title) if cn_title else ""
+    # 剧集的剧名文件夹（剧名.年份，无集数）：单集文件完成后要收进这个文件夹
+    show_dir = ""
+    if cn_title:
+        try:
+            cand = show_folder(cn_title)
+            info = analyze(cn_title)
+            if info.sig and cand and cand != cn_folder:
+                show_dir = cand
+        except Exception:  # noqa: BLE001 - 剧名文件夹算不出不影响主流程
+            show_dir = ""
     for attempt in range(1, max_retries + 1):
         try:
             task_id, name = client.create_offline_task(url, parent_id, cn_name=cn_folder)
@@ -249,10 +318,11 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
             )
             if status_code == GuangyaClient.STATUS_SUCCESS:
                 log.info("任务 %s 完成: %s", task_id, msg)
-                # 把离线下载生成的【外层文件夹】重命名为中文标题（不动里面的文件）
+                # 把离线下载生成的【外层产物】重命名为中文标题（剧集单集再收进剧名文件夹）
                 if cn_folder:
                     try:
-                        rename_ok = _rename_artifact_to_cn(client, task_id, name, parent_id, cn_folder)
+                        rename_ok = _rename_artifact_to_cn(client, task_id, name, parent_id,
+                                                           cn_folder, show_dir=show_dir)
                     except GuangyaError as exc:
                         rename_ok = False
                         log.warning("中文文件夹重命名失败（保留原名 %s）: %s", name, exc)
@@ -427,9 +497,20 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
                         _record_ledger(store, rec.title or "", rec.category or "")
                         # 提交路径因超时而未改名时，监控线程补做中文改名
                         if rec.cn_folder and rec.parent_id and rec.renamed not in (1, 2):
+                            # 剧名文件夹与提交路径同逻辑：从原标题重算（剧集单集需收纳）
+                            show_dir = ""
+                            try:
+                                if rec.title:
+                                    cand = show_folder(rec.title)
+                                    info = analyze(rec.title)
+                                    if info.sig and cand and cand != rec.cn_folder:
+                                        show_dir = cand
+                            except Exception:  # noqa: BLE001
+                                show_dir = ""
                             try:
                                 rename_ok = _rename_artifact_to_cn(
-                                    client, tid, t.name or "", rec.parent_id, rec.cn_folder)
+                                    client, tid, t.name or "", rec.parent_id, rec.cn_folder,
+                                    show_dir=show_dir)
                                 store.update(rec.hash, renamed=1 if rename_ok else 2)
                                 if rename_ok:
                                     log.info("监控补改名成功: %s", rec.cn_folder)

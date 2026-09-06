@@ -714,6 +714,23 @@ class GuangyaClient:
             self.wait_task(task_id)
         log.info("已删除光鸭文件: %s", file_id)
 
+    def move_file(self, file_id: str, target_parent_id: str) -> None:
+        """把文件/文件夹移动到目标目录（用于剧集单集收进剧名文件夹）。
+
+        接口（对齐 LitePan transport.go pathMoveFile / ops.go moveViaTask）：
+          POST /userres/v1/file/move_file   body {"fileIds": [...], "parentId": 目标}
+        异步任务（实测返回 taskId，状态 2=完成），等待完成后再返回。
+        2026-09 已用真实账号实测：文件夹移动往返成功、零残留。
+        """
+        if not file_id or not target_parent_id:
+            return
+        data = self._api_post("/userres/v1/file/move_file",
+                              {"fileIds": [file_id], "parentId": target_parent_id}) or {}
+        task_id = (data.get("taskId") or "").strip()
+        if task_id:
+            self.wait_task(task_id)
+        log.info("已移动光鸭文件 %s → 目录 %s", file_id, target_parent_id)
+
     def list_dir(self, parent_id: str = "", page_size: int = 200) -> list[dict]:
         """列出某目录下的全部条目（文件 + 文件夹，自动翻页）。
 

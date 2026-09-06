@@ -109,6 +109,8 @@ _TECH = re.compile(
     r"dvdrip|dvdr|h\.?264|h\.?265|x\.?264|x\.?265|hevc|avc|mpeg|yuv420p)\b"
     r"|\b(remastered|restored|imax|hdr(?:10)?\+?|dolby\s*(?:vision|atmos|truehd)|dovi|dv|"
     r"truehd|ac3|aac|flac|lpcm|[1-9]\.[01]|10bit|8bit)\b"
+    # 帧率与平台标记：24fps/60fps、iq(iqiyi 国际站)/iqiyi/youku 等常粘在片名后
+    r"|\b\d{2,3}\s*fps\b|\biq(?:iyi)?\b|\byouku\b|\bwebkit\b"
     # DTS 家族整体匹配（含可选 MA 后缀）。必须放在所有短分支之前：
     # 若先被 dts[- ]?hd 吃掉，就会剩下孤立的 MA 粘进片名。
     # 且绝不能退化成裸 ma —— 那会啃掉 Terminator/Batman/The Matrix 里的 "ma"。
@@ -138,9 +140,12 @@ _NOISE_WORDS = re.compile(
 )
 
 # 剧集/综艺进度词（把「追更到哪了」从片名里摘走；含 1-5集 / 1~5集 / 1至5集 范围写法）
+# ⚠️ 「全季/整季/全集」这类无数字聚合词只进 _PROGRESS（剥 core），不可进 _PACK：
+#    整季包标题同时带「第二季」，进 _PACK 会清掉季号 sig，folder 丢掉 .S02。
 _PROGRESS = re.compile(
     r"更新至[^，。|]*(?:集|话|話|期)|更新到[^，。|]*(?:集|话|話|期)|连载中|连更中|大结局|完结|"
-    r"全\s*\d+\s*[集话話]|共\s*\d+\s*[集话話]|\d{1,3}\s*[-~至]\s*\d{1,3}\s*[集话話期]"
+    r"全\s*\d+\s*[集话話]|共\s*\d+\s*[集话話]|\d{1,3}\s*[-~至]\s*\d{1,3}\s*[集话話期]|"
+    r"全\s*(?:一\s*)?季|全\s*\d+\s*季|共\s*\d+\s*季|整\s*季|全集|合集"
 )
 
 # ---------------- 集数 / 季数解析（含中文数字） ----------------
@@ -446,7 +451,9 @@ def analyze(title: str) -> ResourceInfo:
         if translated:
             info.core = translated
             translated_from_en = True
-    # 中文片名为主时，丢掉夹带的英文（不同频道常写不同译名/写不写英文，会破坏账本一致性）
+    # 中文片名为主时，丢掉夹带的英文（不同频道常写不同译名/写不写英文，会破坏账本一致性）。
+    # 注意只丢字母、不动数字：流浪地球2TheWandering... 粘连时 2 是片名一部分；
+    # 技术参数（IQ24 / 24fps）由 _TECH 整词剥除，不走这里。
     core_en = ""
     if _KEEP.search(info.core) and re.search(r"[一-鿿]", info.core):
         core_en = "".join(re.findall(r"[A-Za-z0-9]+", info.core))
@@ -486,6 +493,22 @@ def analyze(title: str) -> ResourceInfo:
 def folder_name(title: str) -> str:
     """对外：给定标题返回落盘文件夹名。"""
     return analyze(title).folder
+
+
+def show_folder(title: str) -> str:
+    """对外：剧集的「剧名文件夹」名（剧名.年份，不带集数/季号）。
+
+    需求：一部电视剧一个文件夹，同一部剧的各集都收进
+    分类目录/剧名.年份/ 下（如 国产剧/夏季.2026/夏季.S01E04.mkv）。
+    非剧集（无 sig）返回 analyze(title).folder（与落盘名一致）。
+    """
+    info = analyze(title)
+    if not info.sig or not info.core:
+        return info.folder
+    name = info.core
+    if info.year:
+        name = f"{name}.{info.year}"
+    return name
 
 
 def norm(s: str) -> str:
