@@ -1,10 +1,11 @@
-# 临时诊断工作流：从 GitHub 机房抓取各磁力搜索站的响应样本
-# （沙箱/国内网络够不着这些站，GitHub 机房可达）。
-# 用法：Actions → fetch-samples → Run workflow → 下载 artifact search-samples
+# 临时诊断工作流：从 GitHub 机房抓取各磁力搜索站的响应样本，
+# 直接 commit 到专用分支 search-samples（沙箱连 artifact/log 下载域，
+# 只 git 协议可达）。
 name: fetch-samples
 on:
   workflow_dispatch: {}
-permissions: {}
+permissions:
+  contents: write
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -25,15 +26,11 @@ jobs:
           grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
           grab apibay_query.json      "https://apibay.org/q.php?q=interstellar&cat=0"
           ls -la samples/
-      - name: Dump samples into run log (base64)
+      - name: Commit samples to branch
         run: |
-          for f in samples/*; do
-            echo "====BEGIN $(basename "$f") $(wc -c < "$f") bytes===="
-            base64 -w 400 "$f"
-            echo "====END $(basename "$f")===="
-          done
-      - uses: actions/upload-artifact@v4
-        with:
-          name: search-samples
-          path: samples/
-          retention-days: 3
+          git config user.email "actions@github.com"
+          git config user.name "gh-actions"
+          git checkout -q --detach
+          git add -f samples/
+          git commit -q -m "search samples $(date -u +%FT%TZ)"
+          git push -q -f origin HEAD:refs/heads/search-samples
