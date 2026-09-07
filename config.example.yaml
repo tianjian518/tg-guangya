@@ -1,0 +1,143 @@
+# ===== 光鸭云盘账号 =====
+# 首次留空，运行 `python login.py` 扫码后自动回填
+guangya:
+  access_token: ""
+  refresh_token: ""
+  client_id: "aMe-8VSlkrbQXpUR"   # 光鸭公开 client_id，一般不用改
+  device_id: ""                    # 留空自动生成
+
+# ===== 磁力来源 =====
+sources:
+  type: web                       # web（推荐，公开频道网页抓取，零风控）/ userbot（账号实时监听）
+  channels:
+    # === 精选影视资源频道（28 个，已实测可出磁力/迅雷/电驴链接）===
+    - ysh365
+    - seedhub_cc
+    - tubeget
+    - yunpanpan
+    - gdsharing
+    - Aliyundrive_Share_Channel
+    - Aliyun_4K_Movies
+    - Plus_Movie_Best
+    - zaproshare
+    - XiangxiuNB
+    - MovieAnywhere
+    - CurlyMouse
+    - alistshare
+    - yszylm
+    - woniubuchuiniu
+    - jlpahz
+    - HLWYS
+    - beyondHD
+    - TVbox888
+    - alyp_1
+    - doubanchannel
+    - YXHMd
+    - zerodemovie
+    - mytvseries
+    - cinephiliajam
+    - yunpanshare
+    - alikuake
+    - abskoop
+    # 想加更多？直接填这里，或交给 discovery 自动发现（默认关闭，避免频道无限膨胀）
+  poll_interval: 120              # 网页模式轮询间隔（秒，最小 30）
+
+# ===== 过滤规则 =====
+filter:
+  include_keywords: []            # 命中任意一个才转存；留空=全部转
+  # - "1080P"
+  # - "4K"
+  exclude_keywords: []            # 命中任意一个则跳过
+  # - "预告"
+  # - "样本"
+  min_resolution: ""              # 最低画质：1080P / 2160P / 4K，留空不限
+
+# ===== 转存去向 =====
+output:
+  parent_id: ""                   # 光鸭目标目录 fileId，留空=根目录（不推荐，建议建个"自动转存"文件夹）
+  save_path: ""                   # 也可用目录名（需已存在）
+
+# ===== Telegram（仅 userbot 模式需要）=====
+telegram:
+  api_id: ""                      # https://my.telegram.org 申请
+  api_hash: ""
+  session: "tg_user.session"
+
+# ===== Telegram 机器人（可选，推荐开着）=====
+# 和上面的 telegram 段（userbot 账号监听）是两套东西，互不干扰：
+#   telegram 段 = 用「你的账号」登录去实时监听频道
+#   bot 段      = 用「机器人」在手机上控制程序 + 接收转存通知
+# 开启后对着机器人直接发磁力就能转存，还能 /status 查进度、/pause 暂停、/add 加频道。
+bot:
+  enabled: false                  # true = 开启（需要装 pyTelegramBotAPI）
+  token: ""                       # 找 @BotFather 申请，形如 123456:ABC-DEF...
+  admin_ids: []                   # 你的数字 ID，找 @userinfobot 问；例：[123456789]
+  notify: true                    # 转存/跳过/失败的结果是否推送给你
+  proxy: ""                       # 留空则沿用 sources.proxy
+  allow_anyone: false             # true = 谁都能用（不建议，等于开放你的网盘）
+  search_enabled: true            # /s 全网磁力搜索（引擎 apibay=海盗湾公开API；运行机需把 apibay.org 真实IP写进 /etc/hosts，详见 core/magnet_search.py）
+  search_engines: [apibay]        # 可同时启用多个，未来扩展
+
+# ===== TMDB（片名智能识别，可选）=====
+# 填上 Key 后，云端去重可识别「中文名↔英文原名」「第几部续集」，减少误判/漏判。
+# 申请：themoviedb.org 注册 → 设置 → API → 创建（免费）。Key 形如 1a2b3c...
+tmdb:
+  api_key: ""                     # TMDB API Key (v3 auth)，面板「系统设置 → TMDB」里填
+
+# ===== 频道自动发现 =====
+# 开启后，主程序后台线程定期从 seed_file / seed_urls 里抠新频道，
+# 先扫 1 页验证是否有磁力（verify_threshold >= 1），有磁力才入库。
+# 也能单独跑 `python discover.py --config config.yaml --save` 手动触发一次。
+discovery:
+  enabled: false                  # true = 开
+  interval_hours: 24              # 发现间隔（小时）
+  verify_threshold: 1             # 新频道至少要有 N 条磁力才入库；0 = 不验证（老行为）
+  seed_file: "seeds/channels_seed.txt"   # 本地种子（已内置一批影视频道，不受上限限制）
+  seed_urls:                      # 网络种子（最佳努力，可达才生效）
+    - "https://raw.githubusercontent.com/zhan2046/telegram-groups/main/README.md"
+    - "https://raw.githubusercontent.com/TG-NAV/tg-nav.github.io/master/nav/channel.md"
+
+# ===== 其它 =====
+storage_db: "tg_guangya.db"       # 去重数据库
+notify_console: true             # 控制台通知
+max_retries: 3                    # 单条失败重试次数
+scan_history: false              # 启动是否补抓历史消息
+history_pages: 3
+
+# ===== 自动分类转存 =====
+# 开启后：频道里的资源会按「内容形态 + 地区」自动建子目录并转存进去，
+# 不再扁平化堆在转存根目录里。目录不存在会自动创建。
+organize:
+  enabled: true
+  # flat      = 华语电影 / 欧美电影 / 国产剧 / 日韩剧 ...（扁平，推荐）
+  # two_level = 电影/华语、电视剧/欧美 ...（两级）
+  structure: flat
+  create_missing: true        # 分类目录不存在时自动创建
+  unknown_dir: 未分类          # 判定不出类别时放这里
+  mapping:                    # 可自定义目录名，格式 "内容形态:地区": 目录名
+    "movie:cn": 华语电影
+    "movie:west": 欧美电影
+    "movie:jpkr": 日韩电影
+    "movie:other": 其他电影
+    "tv:cn": 国产剧
+    "tv:west": 欧美剧
+    "tv:jpkr": 日韩剧
+    "tv:other": 其他剧集
+    "anime:cn": 国产动漫
+    "anime:jpkr": 日本动漫
+    "anime:west": 欧美动漫
+    "documentary:cn": 纪录片
+    "variety:cn": 综艺
+    "music:cn": 演唱会
+
+# ===== 转存去重 =====
+# 两级去重，杜绝同一部片子被重复转存：
+#   1) 本地记录去重：按磁力 btih 去重（同一链接再次出现直接跳过）
+#   2) 云端复查：在资源对应的分类目录里按片名匹配，确认光鸭盘里有没有这个片子
+#      - 云端已有 -> 丢弃（用户保留着，或是不同磁力指向同一部）
+#      - 云端没有（被用户删了）-> 重新转存一次
+dedup:
+  cloud_check_new: true   # 首次出现的链接也去云端复查，防「同一片子不同磁力」重复转存
+  cache_ttl: 300          # 云端目录列表缓存秒数，避免刷屏时反复列举
+  upgrade: false          # 洗版/版本升级：新链接质量更优才替换盘里的旧版本（删除不可逆，默认关）
+  require_cn: true        # 落盘准入：标题能规范成中文片名且能整理进中文分类；做不到就放弃链接

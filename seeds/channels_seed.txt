@@ -1,0 +1,42 @@
+# 影视频道种子（每行一个 @用户名 或 t.me/xxx 或纯用户名）
+# 定期发现会基于此 + seed_urls 自动扩充。把你看中的频道加进来即可。
+ysh365
+seedhub_cc
+tubeget
+yunpanpan
+gdsharing
+Aliyundrive_Share_Channel
+Aliyun_4K_Movies
+Plus_Movie_Best
+zaproshare
+XiangxiuNB
+MovieAnywhere
+CurlyMouse
+alistshare
+yszylm
+woniubuchuiniu
+jlpahz
+HLWYS
+beyondHD
+TVbox888
+alyp_1
+doubanchannel
+YXHMd
+zerodemovie
+mytvseries
+cinephiliajam
+yunpanshare
+alikuake
+abskoop
+
+# ===== 候选待验证频道（来自 resource_channel_config.json，2025-10-29 导出）=====
+# 这些频道按名称推测「可能发磁力」，但未经实测。交由自动发现机制分批拉入，
+# 真正是否发磁力会在监控运行时自动验证（不发磁力的频道抓不到东西、自动跳过）。
+# 你也可以用 verify_channels.py 一次性扫描，输出应保留的频道清单。
+hdhhd21          # 影视热门更新
+zhenyingsg       # 帧影时光
+tgsearchers2     # 资源宇宙[频道]
+xingqiump4       # 星球放映室4K小组发布频道
+PanjClub         # 盘酱酱Club
+dianyingshare    # 动漫/漫画
+esforward        # ES转发订阅

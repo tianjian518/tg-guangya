@@ -1,0 +1,24 @@
+# 核心依赖（必须）
+requests>=2.28
+PyYAML>=6.0
+
+# 扫码登录生成二维码（必须；若不生成图片也可手开链接）
+qrcode>=7.3
+
+# Web 管理面板（必须）
+fastapi>=0.103
+uvicorn>=0.23
+python-multipart>=0.0.9   # 备份还原的文件上传（multipart/form-data）必须依赖
+
+# 可选：影视文件名智能解析（不装也能跑，仅退化为简单规则）
+guessit>=3.7
+
+# 可选：userbot 实时监听模式（sources.type=userbot 时才需要）
+telethon>=1.30
+
+# 可选：Telegram 机器人（bot.enabled=true 时才需要）
+# 用于手机上端命令控制（/status /pause /add 频道）与转存结果推送
+pyTelegramBotAPI>=4.14
+
+# 可选：中文→拼音（云端去重拼音兜底；不装则自动跳过该层匹配）
+pypinyin>=0.49

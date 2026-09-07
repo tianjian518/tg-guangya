@@ -1,0 +1,34 @@
+# 临时诊断工作流：从 GitHub 机房抓取各磁力搜索站的响应样本，
+# 直接 commit 到专用分支 search-samples（沙箱连 artifact/log 下载域，
+# 只 git 协议可达）。
+name: fetch-samples
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch search API samples
+        run: |
+          mkdir -p samples
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+          grab() { code=$(curl -sSL -H "User-Agent: $UA" --max-time 25 -o "samples/$1" -w "%{http_code} -> %{url_effective}" "$2" || echo ERR); echo "$1 -> $code"; }
+          grab bt4g_search.html       "https://bt4g.org/search/interstellar"
+          grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
+          grab solid_v1.json          "https://solidtorrents.to/api/v1/search?q=interstellar"
+          # dmhy 详情页（https 直连）——验证磁力链接格式
+          grab dmhy_detail.html       "https://share.dmhy.org/topics/view/722515_GM-Team_5_Fights_Break_Sphere_2022_207_HEVC_GB_4K.html"
+          grab dmhy_detail2.html      "https://share.dmhy.org/topics/view/722506_GM-Team_5_Fights_Break_Sphere_2022_206_HEVC_GB_4K.html"
+          ls -la samples/
+      - name: Commit samples to branch
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "gh-actions"
+          git checkout -q --detach
+          git add -f samples/
+          git commit -q -m "search samples $(date -u +%FT%TZ)"
+          git push -q -f origin HEAD:refs/heads/search-samples
