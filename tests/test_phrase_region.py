@@ -126,9 +126,65 @@ def test_chinese_title_tmdb_region():
     print("  OK 耳语人→west / 名侦探柯南→jpkr / 霸王别姬→cn / 查不到→cn")
 
 
+def test_progress_bare_number_strip():
+    """「更新至17」光数字追更写法（不带「集」字）必须从 core 剥净。
+
+    复现「早春晴朗更新至17 → 欧美剧」缺陷：_PROGRESS 原来只认
+    「更新至…集/话/話/期」结尾，光数字漏网 → 整串脏词喂给 TMDB 模糊搜索，
+    命中错误条目 original_language=en → region=west strong → 国产剧落进欧美剧。
+
+    三层断言：
+      1. core/folder 剥干净（命名不再残留「更新至17」）；
+      2. TMDB 收到的查询词是干净片名（不是脏串）；
+      3. 干净查询词命中 zh → region_hint=cn strong → 分类为国产剧。
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from unittest import mock
+
+    from core import media_meta as mm
+    from core.classifier import Classifier
+    from core.ident import analyze
+
+    print("\n=== 「更新至17」光数字进度词剥净（早春晴朗缺陷）===")
+
+    # ① 无 TMDB 环境：core/folder 剥干净 + is_pack 保留（剧集包判定看原始标题）
+    a = analyze("早春晴朗更新至17")
+    assert a.core == "早春晴朗", f"core 应剥成 早春晴朗，实际 {a.core!r}"
+    assert a.folder == "早春晴朗", f"folder 不应残留进度词，实际 {a.folder!r}"
+    assert a.is_pack is True, "「更新至」原始标题仍应判剧集包（is_pack）"
+
+    # ②③ mock TMDB：查询词必须干净；命中 zh → cn strong → 国产剧
+    queries = []
+    def fake_lookup(q, year=0):
+        queries.append((q, year))
+        return {"cn_name": "早春晴朗", "original_language": "zh", "year": 2026}
+    with mock.patch.object(mm, "_tmdb_key", lambda: "fake-key"), \
+         mock.patch.object(mm, "_tmdb_lookup", fake_lookup):
+        a = analyze("早春晴朗更新至17")
+        assert queries[-1][0] == "早春晴朗", (
+            f"TMDB 查询词应为干净片名 早春晴朗，实际 {queries[-1][0]!r}（脏词会命中错误条目）")
+        assert a.region_hint == "cn" and a.region_hint_strong, (
+            f"应取 TMDB zh → cn 强提示，实际 {a.region_hint!r} strong={a.region_hint_strong}")
+        r = Classifier().classify(a.title, extra=a.folder,
+                                  region_hint=a.region_hint,
+                                  region_hint_strong=a.region_hint_strong)
+        assert r.category == "国产剧", f"国产剧应落 国产剧，实际 {r.category!r}"
+
+    # 回归：带「集」字的旧形态仍整段剥（不能只剥光数字留下尾巴）
+    for t in ("早春晴朗更新至17集", "繁花 更新至18集 1080P 国语中字", "狂飙 更新至第15集 1080p"):
+        c = analyze(t).core
+        assert "更新至" not in c and "17" not in c and "18" not in c and "15" not in c, (
+            f"{t!r} 的 core={c!r} 仍残留进度词")
+        assert "更新" not in analyze(t).folder, f"{t!r} folder={analyze(t).folder!r} 残留进度词"
+    print("  OK core/folder 剥净、TMDB 查询词干净、zh→国产剧；旧带集字形态不受影响")
+
+
 if __name__ == "__main__":
     test_phrase_region_cn()
     test_phrase_region_jpkr()
     test_chinese_title_always_cn()
     test_chinese_title_tmdb_region()
+    test_progress_bare_number_strip()
     print("\n==== 短语地区识别：全部通过 ✅")
