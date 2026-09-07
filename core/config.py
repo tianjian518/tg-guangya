@@ -42,7 +42,8 @@ class TelegramConfig:
 
 
 # 与 core.magnet_search.ENGINES 保持同步的可用引擎名（配置白名单）+ 默认启用顺序
-DEFAULT_SEARCH_ENGINES = ["apibay", "nyaa"]
+# dmhy=动漫花园（国漫首选，吃中文，磁力二跳详情页较慢）
+DEFAULT_SEARCH_ENGINES = ["apibay", "nyaa", "dmhy"]
 SEARCH_ENGINE_NAMES = frozenset(DEFAULT_SEARCH_ENGINES)
 
 @dataclass
@@ -63,7 +64,7 @@ class BotConfig:
     proxy: str = ""              # 留空则沿用 sources.proxy
     allow_anyone: bool = False   # True = 所有人可用（不建议，谁都能往你盘里塞）
     search_enabled: bool = True  # /s 全网磁力搜索
-    search_engines: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_ENGINES))  # apibay=海盗湾镜像API；nyaa=动漫剧集（吃中文）
+    search_engines: list[str] = field(default_factory=lambda: list(DEFAULT_SEARCH_ENGINES))  # apibay=海盗湾镜像API（吃英文）；nyaa=动漫剧集（吃中文）；dmhy=动漫花园（国漫首选，吃中文）
 
 
 @dataclass
@@ -430,7 +431,7 @@ class AppConfig:
             self.bot.search_enabled = bool(bo["search_enabled"])
         if "search_engines" in bo:
             self.bot.search_engines = [
-                str(x).strip() for x in bo["search_engines"] if str(x).strip() in ("apibay",)
+                str(x).strip() for x in bo["search_engines"] if str(x).strip() in SEARCH_ENGINE_NAMES
             ]
         tm = s.get("tmdb") or {}
         if "api_key" in tm:

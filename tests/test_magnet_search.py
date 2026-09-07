@@ -173,7 +173,7 @@ class MagnetSearchTest(unittest.TestCase):
         try:
             c = AppConfig.load(p)
             self.assertTrue(c.bot.search_enabled)            # 默认开
-            self.assertEqual(c.bot.search_engines, ["apibay", "nyaa"])  # 默认双引擎
+            self.assertEqual(c.bot.search_engines, ["apibay", "nyaa", "dmhy"])  # 默认三引擎
         finally:
             os.unlink(p)
 

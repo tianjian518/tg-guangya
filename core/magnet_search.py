@@ -12,6 +12,11 @@
           国产剧国漫都能搜到，日韩更不用说）——中文资源短板的主要补充。
           GET https://nyaa.si/?page=rss&q=<关键词>  →  RSS XML
           样本实测：中文「斗破苍穹」返回 75 条、最新集次日即有。
+  dmhy    动漫花园 share.dmhy.org（**国漫首选**，直接吃中文，国产剧/电影覆盖弱）。
+          两跳：RSS 列表 → 详情页抓磁力（RSS 不带 infoHash）。
+          样本实测：「斗破苍穹」445 条（GM-Team 4K/简体内封，最新集次日即有）。
+          落选记录：bt4g/btdig/solidtorrents 全是 Cloudflare JS 挑战（普通
+          requests 过不去）、btbtt 机房连不通——中文 DHT/论坛源暂时无解。
 
 注意（部署这台机器的同学）：
 - 搜索引擎域名一般被污染/封锁，需要把「真实 IP」写进 /etc/hosts 才能连
@@ -21,7 +26,8 @@
       curl "https://223.5.5.5/resolve?name=nyaa.si&type=A"
       echo "<真实IP> apibay.org" | sudo tee -a /etc/hosts
 - 搜索必须带浏览器 UA，否则 Cloudflare 直接 403。
-- nyaa.si 也可走 config 的 bot.proxy。
+- nyaa.si / share.dmhy.org 被 SNI 阻断的环境（与 GFW 同款症状）走 config 的
+  bot.proxy（dmhy/nyaa 引擎自动继承；apibay 若可达则直连不受影响）。
 """
 from __future__ import annotations
 
@@ -261,7 +267,7 @@ def search_apibay(keyword: str, limit: int = 10, proxy: str = "",
 NYAA_ENDPOINT = "https://nyaa.si/"
 _ITEM_RE = re.compile(r"<item>(.*?)</item>", re.S)
 _FIELD_RE = {f: re.compile(r"<%s>(.*?)</%s>" % (f, f), re.S)
-             for f in ("title", "nyaa:infoHash", "nyaa:seeders", "nyaa:size")}
+             for f in ("title", "link", "nyaa:infoHash", "nyaa:seeders", "nyaa:size")}
 _UNIT_BYTES = {"B": 1, "KB": 10**3, "KiB": 1 << 10, "MB": 10**6, "MiB": 1 << 20,
                "GB": 10**9, "GiB": 1 << 30, "TB": 10**12, "TiB": 1 << 40}
 
@@ -315,6 +321,83 @@ def search_nyaa(keyword: str, limit: int = 10, proxy: str = "",
         if len(hits) >= limit:
             break
     hits.sort(key=lambda h: h.seeders, reverse=True)
+    return hits
+
+
+# ---------------- 动漫花园 dmhy（国漫首选源，直接吃中文）----------------
+# 2026-09 GitHub 机房实测样本（tests/fixtures/dmhy_*.xml）：
+#   - RSS https://share.dmhy.org/topics/rss?keyword=<kw> 关键词过滤生效，
+#     「斗破苍穹」445 条（GM-Team 国漫组，4K/1080P/简体内封，最新集次日即有）；
+#   - 但 RSS 不带 infoHash（nyaa 那样直接构磁力不可行），需对结果抓详情页二跳；
+#   - 覆盖面：国漫/日番/日韩剧强；国产剧/电影弱（「狂飙」只命中同名日番与游戏）。
+#   - 用户环境若被 SNI 阻断（与 nyaa 同类站），配 bot.proxy 即可走代理。
+
+DMHY_ENDPOINT = "https://share.dmhy.org/"
+# dmhy 详情页磁力：magnet:?xt=urn:btih:<40位hex>（btih 之后可能还有 dn/tr 参数）
+_MAGNET_HASH_RE = re.compile(r"magnet:\?xt=urn:btih:([0-9a-fA-F]{40})")
+
+
+def _dmhy_fetch_detail_magnet(link: str, proxy: str, timeout: int) -> str:
+    """抓 dmhy 详情页，提取磁力 infoHash。失败返回空串（单条失败不致命）。"""
+    try:
+        rd = requests.get(link, headers={"User-Agent": SEARCH_UA},
+                          proxies=_proxies(proxy), timeout=timeout)
+        rd.raise_for_status()
+        m = _MAGNET_HASH_RE.search(rd.text or "")
+        return m.group(1) if m else ""
+    except Exception as exc:  # noqa: BLE001 - 单条详情页失败不影响其它结果
+        log.debug("dmhy 详情页磁力提取失败 %s: %s", link, exc)
+        return ""
+
+
+def search_dmhy(keyword: str, limit: int = 10, proxy: str = "",
+                timeout: int = 12) -> List[SearchHit]:
+    """搜动漫花园 dmhy（国漫/日番/日韩剧，中文原词直搜）。
+
+    两跳流程：RSS 列表（标题+详情页链接）→ 逐条抓详情页提取磁力。
+    二跳每条一个请求，为控制延迟默认最多抓前 6 条 RSS 结果。
+    RSS 不含做种数/大小，size_bytes/seeders 置 0（展示为「-」，排序靠后）。
+    """
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    url = DMHY_ENDPOINT + "topics/rss?" + urllib.parse.urlencode({"keyword": kw})
+    r = requests.get(url, headers={"User-Agent": SEARCH_UA},
+                     proxies=_proxies(proxy), timeout=timeout)
+    r.raise_for_status()
+    body = r.text or ""
+    if "<item>" not in body:
+        raise RuntimeError("dmhy 返回非 RSS（可能被 Cloudflare 拦），HTTP %s" % r.status_code)
+    # RSS 列表：title（CDATA）+ link（详情页）。标题占位符保证凑不满也兜得住。
+    entries: List[tuple] = []
+    for chunk in _ITEM_RE.findall(body):
+        mt = _FIELD_RE["title"].search(chunk)
+        ml = _FIELD_RE["link"].search(chunk)
+        title = (mt.group(1).strip() if mt else "")
+        link = (ml.group(1).strip() if ml else "")
+        if not title or not link:
+            continue
+        # CDATA 包装先剥（⚠️ 不能直接跑「剥 HTML 标签」正则：CDATA 内容没有 >，
+        # <[^>]+> 会把 <![CDATA[标题…]]> 整段当成一个标签吞掉，实测踩过）。
+        title = re.sub(r"<!\[CDATA\[|\]\]>", "", title)
+        title = re.sub(r"<[^>]+>", "", title).strip()
+        entries.append((title, link))
+        if len(entries) >= min(limit, 6):
+            break
+    hits: List[SearchHit] = []
+    for title, link in entries:
+        info = _dmhy_fetch_detail_magnet(link, proxy, timeout)
+        if len(info) != 40:
+            continue
+        hits.append(SearchHit(
+            title=title,
+            size_bytes=0,
+            seeders=0,
+            magnet=_build_magnet(info, title),
+            source="dmhy",
+        ))
+        if len(hits) >= limit:
+            break
     return hits
 
 
@@ -378,12 +461,15 @@ def translate_cn_keyword(keyword: str, timeout: int = 6) -> str:
 # 可扩展引擎表：加新源时实现同名函数并注册进来。
 # CJK_OK = 该引擎直接支持中文关键词（不走翻译）。
 #   apibay 不支持中文（中文 query 只回热门榜），必须先翻成英文；
-#   nyaa 直接吃中文（国漫/国产剧/日韩收录好，且用户看到的标题里本就有中文）。
+#   nyaa / dmhy 直接吃中文（国漫/国产剧/日韩收录好，且用户看到的标题里本就有中文）；
+#   dmhy 是国漫首选（「斗破苍穹」445 条实测，含 GM-Team 4K/简体内封），
+#   但磁力需要二跳详情页（慢），且国产剧/电影覆盖弱。
 ENGINES = {
     "apibay": search_apibay,
     "nyaa": search_nyaa,
+    "dmhy": search_dmhy,
 }
-CJK_OK_ENGINES = {"nyaa"}
+CJK_OK_ENGINES = {"nyaa", "dmhy"}
 
 
 def search_all(keyword: str, engines: Optional[List[str]] = None, limit: int = 8,
