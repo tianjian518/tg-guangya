@@ -1028,7 +1028,7 @@ def run_userbot(cfg: AppConfig, handler) -> None:
     src = UserbotSource(
         cfg.telegram.api_id, cfg.telegram.api_hash,
         cfg.telegram.session, cfg.source.channels,
-        proxy=cfg.source.proxy,
+        proxy=cfg.source.proxy, comments=cfg.source.comments,
     )
     src.on_message(handler)
     src.run()
@@ -1098,7 +1098,9 @@ def main() -> None:
     # 来源对象（网页模式下，其频道列表会随自动发现实时更新）
     source_obj = None
     if cfg.source.type != "userbot":
-        source_obj = WebScraper(cfg.source.channels, interval=cfg.source.poll_interval, proxy=cfg.source.proxy)
+        source_obj = WebScraper(cfg.source.channels, interval=cfg.source.poll_interval,
+                                proxy=cfg.source.proxy,
+                                detail_fallback=cfg.source.detail_fallback)
 
     # 后台自动发现频道（web / userbot 模式通用，只往配置里加）
     disc = start_discovery(cfg, args.config, scraper=source_obj)

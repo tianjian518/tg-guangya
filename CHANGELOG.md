@@ -1,5 +1,23 @@
 # 更新日志
 
+## v1.7.7（2026-09-07）
+
+- **新增：评论区磁力抓取**（`sources.comments`，仅 userbot 模式可用）。
+  实测确认网页版拿不到评论（`t.me/s/<ch>` 无 comment 节点、`?embed=1&comments=1`
+  也只有原帖），评论必须走 MTProto——所以这层做在 Telethon userbot 上：
+  帖子正文没链接 → `GetDiscussionMessage` 找到讨论组里的镜像帖 → 按 `reply_to`
+  翻评论抠磁力，去重后和正文链接合并。讨论组里那条镜像帖自带的磁力也一并收
+  （部分频道机器人把磁力放这）。配置项：`enabled`（默认开）、`max_replies`
+  （默认 30）、`always`（正文已有链接也翻，默认关，省 API 调用降风控）。
+- **新增：详情页兜底**（`sources.detail_fallback`，web/userbot 通用）。
+  列表页对长帖只渲染一部分，磁力可能刚好在被折叠的那段——对「列表里没抠出
+  链接」的消息回查一次 `t.me/<ch>/<id>` 详情页；每轮上限可配（默认 10 条，0=关），
+  详情页 404/超时一律静默跳过，不影响本轮结果。
+- 消息新增 `links_from` 标记（body / comment / detail），日志能看出磁力来源；
+  userbot 的消息处理抽出 `_handle()` 便于单测。
+- 新增 13 个用例：评论抓取 8 个（假 telethon，无需安装/登录）+ 详情兜底 5 个
+  （假 session）；全量 **117 passed**。
+
 ## v1.7.6（2026-09-07）
 
 - **新增：TMDB 年份补全 → 文件夹一律落成 Emby 标准的「影视名称 (年份)」**。

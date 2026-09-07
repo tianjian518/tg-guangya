@@ -18,6 +18,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from adapters.web_scraper import ChannelMessage, extract_links, link_key
+from core.config import CommentsConfig
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +51,8 @@ class UserbotSource:
     登录态保存在 session 文件里；本类只负责连接并实时收消息。
     """
 
-    def __init__(self, api_id: str, api_hash: str, session: str, channels: list[str], proxy: str = "") -> None:
+    def __init__(self, api_id: str, api_hash: str, session: str, channels: list[str],
+                 proxy: str = "", comments=None) -> None:
         try:
             from telethon import TelegramClient  # noqa: F401
         except ImportError as exc:  # 未安装 telethon 时给出友好提示
@@ -62,6 +64,7 @@ class UserbotSource:
         self.session = session
         self.channels = [c.lstrip("@").strip("/") for c in channels if c]
         self.proxy = parse_proxy(proxy)
+        self.comments = comments or CommentsConfig()
         self._client = None
         self._handlers: list[Callable[[ChannelMessage], None]] = []
 
@@ -124,18 +127,13 @@ class UserbotSource:
                 log.warning("无法解析频道 %s: %s", ch, exc)
 
         async def handler(event):
-            msg = event.message
-            text = msg.message or ""
-            links = extract_links(text)
-            if not links:
+            try:
+                cm = await self._handle(client, event.message)
+            except Exception as exc:
+                log.warning("处理消息失败: %s", exc)
                 return
-            ch_title = getattr(getattr(msg, "chat", None), "username", "") or ""
-            cm = ChannelMessage(
-                channel=ch_title or str(getattr(msg, "peer_id", "")),
-                message_id=str(msg.id),
-                text=text,
-                links=links,
-            )
+            if cm is None:
+                return
             for cb in self._handlers:
                 try:
                     cb(cm)
@@ -150,6 +148,79 @@ class UserbotSource:
 
         log.info("开始监听 %d 个频道...", len(entities))
         await client.run_until_disconnected()
+
+    async def _handle(self, client, msg) -> Optional[ChannelMessage]:
+        """把一条消息转成 ChannelMessage；正文没链接时去评论区补。
+
+        返回 None 表示这条跳过（没找到任何可下载链接）。
+        """
+        text = msg.message or ""
+        links = extract_links(text)
+        links_from = "body"
+        # 正文没磁力 → 去评论区找（"链接下载见评论区"这类频道全靠这里）
+        if (not links or self.comments.always) and self.comments.enabled:
+            found = await self._comment_links(client, msg)
+            extra = [u for u in found if u not in links]
+            if extra:
+                links = (links or []) + extra
+                if not extract_links(text):
+                    links_from = "comment"
+                log.info("评论补到 %d 条链接（帖子 %s）", len(extra), msg.id)
+        if not links:
+            return None
+        ch_title = getattr(getattr(msg, "chat", None), "username", "") or ""
+        return ChannelMessage(
+            channel=ch_title or str(getattr(msg, "peer_id", "")),
+            message_id=str(msg.id),
+            text=text,
+            links=links,
+            links_from=links_from,
+        )
+
+    # ---------- 评论区磁力（正文没有时的兜底来源）----------
+
+    async def _comment_links(self, client, msg) -> list[str]:
+        """翻这条帖子的讨论组评论，把里面的可下载链接抠出来。
+
+        链路：频道帖子 → GetDiscussionMessage 拿到它在讨论组里的"镜像帖" →
+        按 reply_to 拉该帖的评论。任一步失败都返回空列表（不当错误抛，
+        评论拿不到最多是这条漏掉，不能把监听循环搞崩）。
+        """
+        try:
+            from telethon.tl.functions.messages import GetDiscussionMessageRequest
+        except ImportError:
+            return []
+        try:
+            peer = await client.get_input_entity(msg.peer_id)
+            res = await client(GetDiscussionMessageRequest(peer=peer, msg_id=msg.id))
+        except Exception as exc:
+            log.debug("取讨论组失败（帖 %s）：%s", msg.id, exc)
+            return []
+        msgs = getattr(res, "messages", None) or []
+        if not msgs:
+            return []  # 频道没开评论
+        root = msgs[0]
+        found: list[str] = []
+        seen: set[str] = set()
+
+        def _collect(text: str) -> None:
+            for u in extract_links(text or ""):
+                k = link_key(u)
+                if k not in seen:
+                    seen.add(k)
+                    found.append(u)
+
+        # 讨论组里的"镜像帖"本身也常带磁力（部分频道是机器人转帖时把磁力放这）
+        _collect(getattr(root, "message", "") or "")
+        try:
+            chat = await client.get_input_entity(getattr(root, "peer_id", None))
+            async for reply in client.iter_messages(
+                chat, reply_to=root.id, limit=self.comments.max_replies
+            ):
+                _collect(getattr(reply, "message", "") or "")
+        except Exception as exc:
+            log.debug("翻评论失败（帖 %s）：%s", msg.id, exc)
+        return found
 
     def run(self) -> None:
         asyncio.run(self._worker())

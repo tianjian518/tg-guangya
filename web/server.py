@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 # ---------- 版本号（单一来源，改这一处即可） ----------
-__version__ = "1.7.6"  # TMDB 年份补全（Emby 命名）+ 代理直连兜底 + 测试离线化
+__version__ = "1.7.7"  # 评论区磁力抓取（userbot）+ 详情页兜底（web）+ TMDB 年份补全
 
 import argparse
 import base64
@@ -512,7 +512,8 @@ def prune_channels():
     if not channels:
         return {"removed": [], "kept": 0, "total": 0}
     pages = max(2, int(cfg.history_pages))
-    sc = WebScraper(channels, interval=cfg.source.poll_interval, proxy=cfg.source.proxy)
+    sc = WebScraper(channels, interval=cfg.source.poll_interval, proxy=cfg.source.proxy,
+                    detail_fallback=cfg.source.detail_fallback)
     zero: list[str] = []
     for ch in channels:
         try:
@@ -574,6 +575,7 @@ def _build_userbot_source() -> UserbotSource:
     return UserbotSource(
         cfg.telegram.api_id, cfg.telegram.api_hash,
         cfg.telegram.session, list(cfg.source.channels), proxy=cfg.source.proxy,
+        comments=cfg.source.comments,
     )
 
 

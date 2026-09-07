@@ -20,11 +20,40 @@ class GuangyaConfig:
 
 
 @dataclass
+class CommentsConfig:
+    """评论区磁力抓取（仅 userbot 模式可用——网页抓取拿不到评论）。
+
+    不少资源频道正文只有「链接下载见评论区」，磁力全在讨论组的评论里。
+    开启后：帖子正文没有可下载链接时，去评论区翻一遍。
+    """
+    enabled: bool = True       # 正文无链接时是否翻评论
+    max_replies: int = 30      # 每条帖子最多翻多少条评论
+    always: bool = False       # True = 正文已有链接也翻评论（来源更多，但 API 调用翻倍）
+
+
+def _load_comments(raw) -> CommentsConfig:
+    """评论区配置：整段省略用默认值，只写部分字段其余也走默认。"""
+    if not isinstance(raw, dict):
+        return CommentsConfig()
+    try:
+        max_replies = int(raw.get("max_replies", 30))
+    except (TypeError, ValueError):
+        max_replies = 30
+    return CommentsConfig(
+        enabled=bool(raw.get("enabled", True)),
+        max_replies=max(1, max_replies),
+        always=bool(raw.get("always", False)),
+    )
+
+
+@dataclass
 class SourceConfig:
     type: str = "web"          # web | userbot
     channels: list[str] = field(default_factory=list)
     poll_interval: int = 120
     proxy: str = ""            # HTTP/HTTPS 代理地址，如 http://127.0.0.1:7890
+    comments: CommentsConfig = field(default_factory=CommentsConfig)
+    detail_fallback: int = 10  # 列表页没链接时，每轮最多回查几条详情页（0=不回查）
 
 
 @dataclass
@@ -161,6 +190,8 @@ class AppConfig:
             channels=[str(c).strip() for c in (s.get("channels") or []) if c],
             poll_interval=int(s.get("poll_interval", 120)),
             proxy=str(s.get("proxy", "")).strip(),
+            comments=_load_comments(s.get("comments")),
+            detail_fallback=int(s.get("detail_fallback", 10) or 0),
         )
         fl = raw.get("filter") or {}
         cfg.filter = FilterConfig(

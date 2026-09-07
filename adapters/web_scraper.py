@@ -89,6 +89,7 @@ class ChannelMessage:
     text: str
     links: list[str]                 # 磁力/迅雷/电驴等可离线链接
     link: str = ""
+    links_from: str = "body"         # body=正文直发 / comment=评论区补的（正文没有时才翻评论）
 
     @property
     def key(self) -> str:
@@ -99,12 +100,14 @@ class ChannelMessage:
 class WebScraper:
     """轮询公开频道的网页预览页。"""
 
-    def __init__(self, channels: list[str], interval: int = 120, timeout: int = 20, proxy: str = "") -> None:
+    def __init__(self, channels: list[str], interval: int = 120, timeout: int = 20,
+                 proxy: str = "", detail_fallback: int = 10) -> None:
         # 允许传入 @name / name / https://t.me/name 三种写法
         self.channels = [self._normalize(c) for c in channels if c]
         self.interval = max(30, int(interval))
         self.timeout = timeout
         self.proxy = proxy or None
+        self.detail_fallback = max(0, int(detail_fallback or 0))
         # 置位=暂停轮询（TG 机器人 /pause 用）。暂停时不抓频道、但仍然保持进程活着。
         self.pause_event = threading.Event()
         self._session = requests.Session()
@@ -121,15 +124,50 @@ class WebScraper:
         c = c.replace("https://t.me/", "").replace("http://t.me/", "")
         return c.lstrip("@").strip("/")
 
-    def fetch(self, channel: str, before: str = "") -> list[ChannelMessage]:
-        """抓取单个频道的一页消息（默认最新一页）。"""
+    def fetch(self, channel: str, before: str = "", detail_fallback: int = 10) -> list[ChannelMessage]:
+        """抓取单个频道的一页消息（默认最新一页）。
+
+        列表页的正文可能被 TG 折叠（长帖只显示一部分、磁力被截断），
+        所以对「列表里没解析出链接」的消息，回查一次单条详情页补全。
+        detail_fallback 是每轮最多回查的条数（0=不回查），控制请求量。
+        """
         url = f"https://t.me/s/{channel}"
         params = {"before": before} if before else None
         resp = self._session.get(url, params=params, timeout=self.timeout)
         if resp.status_code != 200:
             log.warning("抓取 %s 失败: HTTP %s", channel, resp.status_code)
             return []
-        return self._parse_html(channel, resp.text)
+        messages = self._parse_html(channel, resp.text)
+        budget = max(0, int(detail_fallback or 0))
+        for m in messages:
+            if m.links or budget <= 0:
+                continue
+            budget -= 1
+            detail = self._fetch_detail(channel, m.message_id)
+            if not detail:
+                continue
+            links = extract_links(detail)
+            if links:
+                m.links = links
+                m.links_from = "detail"
+                if not m.text.strip():
+                    m.text = detail
+                log.info("详情页补到 %d 条链接（%s#%s）", len(links), channel, m.message_id)
+        return messages
+
+    def _fetch_detail(self, channel: str, message_id: str) -> str:
+        """抓单条消息的详情页正文（失败返回空串，不当错误抛）。"""
+        try:
+            resp = self._session.get(
+                f"https://t.me/{channel}/{message_id}", timeout=self.timeout
+            )
+            if resp.status_code != 200:
+                return ""
+        except Exception as exc:
+            log.debug("详情页请求失败 %s#%s: %s", channel, message_id, exc)
+            return ""
+        m = MSG_TEXT_RE.search(resp.text or "")
+        return self._clean(m.group(1)) if m else ""
 
     def _parse_html(self, channel: str, html: str) -> list[ChannelMessage]:
         """把频道 HTML 解析成消息列表（与网络解耦，便于测试与复用）。"""
@@ -221,7 +259,7 @@ class WebScraper:
             prune_candidates: set[str] = set()
             for channel in active_channels:
                 try:
-                    msgs = self.fetch(channel)
+                    msgs = self.fetch(channel, detail_fallback=self.detail_fallback)
                     if not msgs:
                         failures[channel] = failures.get(channel, 0) + 1
                         if failures[channel] >= max_consecutive_failures:
@@ -279,7 +317,8 @@ class WebScraper:
         """回溯历史消息（可选：首次运行时补抓）。"""
         before = ""
         for _ in range(max(1, pages)):
-            msgs = self.fetch(channel, before=before)
+            msgs = self.fetch(channel, before=before,
+                              detail_fallback=self.detail_fallback)
             if not msgs:
                 return
             yield from msgs
