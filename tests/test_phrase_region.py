@@ -178,6 +178,10 @@ def test_progress_bare_number_strip():
         assert "更新至" not in c and "17" not in c and "18" not in c and "15" not in c, (
             f"{t!r} 的 core={c!r} 仍残留进度词")
         assert "更新" not in analyze(t).folder, f"{t!r} folder={analyze(t).folder!r} 残留进度词"
+    # 同族追更词：「更新到+光数字」「追更中」（与 连更中/连载中 同族）
+    assert analyze("早春晴朗更新到17").core == "早春晴朗", "「更新到+光数字」应剥净"
+    assert analyze("早春晴朗 追更中 第2季").core == "早春晴朗", "「追更中」应剥净（同族词）"
+    assert analyze("早春晴朗 追更中 第2季").sig == "s02", "「追更中」剥净后季数签名不丢"
     print("  OK core/folder 剥净、TMDB 查询词干净、zh→国产剧；旧带集字形态不受影响")
 
 
