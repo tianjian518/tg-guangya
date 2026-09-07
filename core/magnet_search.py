@@ -340,6 +340,11 @@ _MAGNET_HASH_RE = re.compile(r"magnet:\?xt=urn:btih:([0-9a-fA-F]{40})")
 def _dmhy_fetch_detail_magnet(link: str, proxy: str, timeout: int) -> str:
     """抓 dmhy 详情页，提取磁力 infoHash。失败返回空串（单条失败不致命）。"""
     try:
+        # ⚠️ RSS 的 <link> 给的是 http://，而 dmhy 前端只收 https，明文请求会直接
+        # 400（"The plain HTTP request was sent to HTTPS port"），磁力一条都取不到，
+        # 表现就是「dmhy 引擎搜什么都是 0 条」。这里统一升到 https。
+        if link.startswith("http://"):
+            link = "https://" + link[len("http://"):]
         rd = requests.get(link, headers={"User-Agent": SEARCH_UA},
                           proxies=_proxies(proxy), timeout=timeout)
         rd.raise_for_status()
