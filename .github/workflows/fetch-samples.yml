@@ -26,6 +26,18 @@ jobs:
           grab bt4g_search.html       "https://bt4g.org/search/interstellar"
           grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
           grab apibay_query.json      "https://apibay.org/q.php?q=interstellar&cat=0"
+          # 中文资源源探测（2026-09：用户以国产电影/国产剧/国漫为主）
+          # 动漫花园 dmhy：公开 JSON API（国漫/日番/剧集，国创区覆盖国漫）
+          grab dmhy_api_doupo.json    "https://share.dmhy.org/api/topics/list?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9&count=10"
+          grab dmhy_api_juqing.json   "https://share.dmhy.org/api/topics/list?keyword=%E5%BA%86%E4%BD%99%E5%B9%B4&count=10"
+          grab dmhy_rss_doupo.xml     "https://share.dmhy.org/topics/rss?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9"
+          # btdig：DHT 文件名索引（中文文件名资源可搜到）
+          grab btdig_en.html          "https://btdig.com/search?q=interstellar"
+          grab btdig_cn_juqing.html   "https://btdig.com/search?q=%E5%BA%86%E4%BD%99%E5%B9%B4"
+          # BT之家 btbtt：国产电影/剧论坛（搜索 URL 格式多试几种）
+          grab btbtt_s1_juqing.html   "https://btbtt15.com/search-%E5%BA%86%E4%BD%99%E5%B9%B4-sort-create_dt-desc.htm"
+          grab btbtt_s2_juqing.html   "https://btbtt15.com/search/thread?keyword=%E5%BA%86%E4%BD%99%E5%B9%B4"
+          grab btbtt_home.html        "https://btbtt15.com/"
           ls -la samples/
       - name: Commit samples to branch
         run: |
