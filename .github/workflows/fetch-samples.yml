@@ -16,32 +16,13 @@ jobs:
         run: |
           mkdir -p samples
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-          grab() { code=$(curl -sS -H "User-Agent: $UA" --max-time 20 -o "samples/$1" -w "%{http_code}" "$2" || echo ERR); echo "$1 -> $code"; }
-          grab yts_interstellar.json  "https://yts.mx/api/v2/list_movies.json?query_term=interstellar&limit=3&sort_by=seeds"
-          grab nyaa_en.xml            "https://nyaa.si/?page=rss&q=interstellar"
-          grab nyaa_cn_doupo.xml      "https://nyaa.si/?page=rss&q=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9"
-          grab nyaa_cn_juqing.xml     "https://nyaa.si/?page=rss&q=%E5%BA%86%E4%BD%99%E5%B9%B4"
-          grab solid_v1.json          "https://solidtorrents.to/api/v1/search?q=interstellar"
-          grab solid_html.html        "https://solidtorrents.to/search?q=interstellar"
+          grab() { code=$(curl -sSL -H "User-Agent: $UA" --max-time 25 -o "samples/$1" -w "%{http_code} -> %{url_effective}" "$2" || echo ERR); echo "$1 -> $code"; }
           grab bt4g_search.html       "https://bt4g.org/search/interstellar"
           grab bt4g_cn.html           "https://bt4g.org/search/%E5%BA%86%E4%BD%99%E5%B9%B4"
-          grab apibay_query.json      "https://apibay.org/q.php?q=interstellar&cat=0"
-          # 中文资源源探测（2026-09：用户以国产电影/国产剧/国漫为主）
-          # 动漫花园 dmhy：公开 JSON API（国漫/日番/剧集，国创区覆盖国漫）
-          grab dmhy_api_doupo.json    "https://share.dmhy.org/api/topics/list?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9&count=10"
-          grab dmhy_api_juqing.json   "https://share.dmhy.org/api/topics/list?keyword=%E5%BA%86%E4%BD%99%E5%B9%B4&count=10"
-          grab dmhy_rss_doupo.xml     "https://share.dmhy.org/topics/rss?keyword=%E6%96%97%E7%A0%B4%E8%8B%8D%E7%A9%B9"
-          # btdig：DHT 文件名索引（中文文件名资源可搜到）
-          grab btdig_en.html          "https://btdig.com/search?q=interstellar"
-          grab btdig_cn_juqing.html   "https://btdig.com/search?q=%E5%BA%86%E4%BD%99%E5%B9%B4"
-          # BT之家 btbtt：国产电影/剧论坛（搜索 URL 格式多试几种）
-          grab btbtt_s1_juqing.html   "https://btbtt15.com/search-%E5%BA%86%E4%BD%99%E5%B9%B4-sort-create_dt-desc.htm"
-          grab btbtt_s2_juqing.html   "https://btbtt15.com/search/thread?keyword=%E5%BA%86%E4%BD%99%E5%B9%B4"
-          grab btbtt_home.html        "https://btbtt15.com/"
-          # dmhy 二跳：详情页磁力格式 + 国产剧覆盖验证（狂飙 = 2023 国产剧爆款）
-          grab dmhy_detail.html       "http://share.dmhy.org/topics/view/722515_GM-Team_5_Fights_Break_Sphere_2022_207_HEVC_GB_4K.html"
-          grab dmhy_cn_kuangbiao.xml  "https://share.dmhy.org/topics/rss?keyword=%E7%8B%82%E9%A3%99"
-          grab dmhy_cn_doupo_p1.xml   "https://share.dmhy.org/topics/rss?keyword=%E5%B0%8F%E7%8C%AA%E4%BD%A9%E5%A5%87"
+          grab solid_v1.json          "https://solidtorrents.to/api/v1/search?q=interstellar"
+          # dmhy 详情页（https 直连）——验证磁力链接格式
+          grab dmhy_detail.html       "https://share.dmhy.org/topics/view/722515_GM-Team_5_Fights_Break_Sphere_2022_207_HEVC_GB_4K.html"
+          grab dmhy_detail2.html      "https://share.dmhy.org/topics/view/722506_GM-Team_5_Fights_Break_Sphere_2022_206_HEVC_GB_4K.html"
           ls -la samples/
       - name: Commit samples to branch
         run: |
