@@ -130,6 +130,16 @@ _TECH = re.compile(
     r"|\.(mkv|mp4|avi|ts|rmvb|rm|iso|mov|wmv|flv|m2ts)(?=\s|$)"
 )
 
+# 光鸭分享卡片的「影名：xxx」字段。分享转存是主要入口之一，但整句文案
+# （「光鸭云盘用户给你分享了：影名：赵氏孤儿 剧情：…」）直接喂给下面那套剥离
+# 规则是剥不干净的，实测产出「光鸭云盘用户给你分享了影名赵氏孤儿」这种废话
+# 文件名。这里先把片名单抠出来，命中后后续全部逻辑都基于干净片名。
+_SHARE_TITLE = re.compile(
+    r"影\s*名\s*[：:]\s*([^\n\r]{1,50}?)\s*"
+    r"(?=剧情|豆瓣|票房|视频信息|主演|导演|上映|类型|地区|语言|链接|$)",
+    re.I,
+)
+
 # 中文噪声修饰词（语言 / 字幕 / 版本 / 广告词）
 _NOISE_WORDS = re.compile(
     r"(高清|超清|中字|中英字幕|双语|国语|普通话|日语|韩语|英语|法语|泰语|粤语|台语|"
@@ -163,7 +173,9 @@ _NOISE_WORDS = re.compile(
 _PROGRESS = re.compile(
     r"更新至[^，。|]*(?:集|话|話|期)|更新到[^，。|]*(?:集|话|話|期)|"
     r"更新至\s*\d{1,4}|更新到\s*\d{1,4}|"
-    r"连载中|连更中|追更中|大结局|完结|"
+    # ⚠️ 「完结季」必须排在「完结」前面：交替从左到右匹配，只写「完结」会把
+    # 「一念永恒·完结季」剥成「一念永恒季」，剩一个「季」字粘进片名。
+    r"连载中|连更中|追更中|大结局|完结季|完结|"
     r"首更至\s*\d+\s*[集话話]|更至\s*\d+\s*[集话話]|更\s*\d+\s*[集话話期]|"
     r"\d{1,3}\s*[集话話]?\s*稍后|"
     r"全\s*\d+\s*[集话話]|共\s*\d+\s*[集话話]|\d{1,3}\s*[-~至]\s*\d{1,3}\s*[集话話期]|"
@@ -411,6 +423,15 @@ def analyze(title: str) -> ResourceInfo:
     if not raw:
         return info
 
+    # 光鸭分享卡片（「…影名：xxx 剧情：…」）：整句喂进来剥不干净，先用「影名」字段
+    # 定位真实片名，后面的剥离 / 年份 / 季号解析都基于这段干净文本。
+    m_share = _SHARE_TITLE.search(raw)
+    if m_share:
+        picked = (m_share.group(1) or "").strip()
+        if picked:
+            raw = picked
+            info.title = picked
+
     # 年份（分辨率 1080/2160 不算，见 _find_year）
     info.year = _find_year(raw)
 
@@ -492,8 +513,11 @@ def analyze(title: str) -> ResourceInfo:
     # 技术参数（IQ24 / 24fps）由 _TECH 整词剥除，不走这里。
     core_en = ""
     if _KEEP.search(info.core) and re.search(r"[一-鿿]", info.core):
-        core_en = "".join(re.findall(r"[A-Za-z0-9]+", info.core))
-        info.core = re.sub(r"[a-zA-Z]", "", info.core)
+        # ⚠️ 只删「成词」的英文（≥2 字母），单字母要留下：
+        #    「财阀X刑警」的 X 是片名一部分，旧写法 [a-zA-Z] 全删会变成「财阀刑警」；
+        #    同理 core_en 也不收单字母，否则拿 "X" 去查 TMDB 会命中错误条目、带偏地区判定。
+        core_en = "".join(re.findall(r"[A-Za-z0-9]{2,}", info.core))
+        info.core = re.sub(r"[a-zA-Z]{2,}", "", info.core)
         info.core = "".join(_KEEP.findall(info.core))
     # 「中文译名 + 英文原名」的标题（"泰坦尼克号 Titanic 1997" / "阿凡达 Avatar"）：
     # 中文 core 查不出地区，再拿夹带的英文原名查一次，只取地区、不动中文片名。
