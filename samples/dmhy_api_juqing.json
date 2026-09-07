@@ -1,0 +1,244 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>動漫花園資源網 - 動漫愛好者的自由交流平台</title><meta http-equiv="Content-Language" content="zh-TW" />
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><link href="/min/index.php?g=css&amp;v=10" media="screen" rel="stylesheet" type="text/css" /><script type="text/javascript" src="/min/index.php?g=js&amp;v=9"></script><!--[if IE]>
+<link href="/css/iestyles.css" media="screen" rel="stylesheet" type="text/css" />
+<![endif]-->
+<link rel="shortcut icon" href="/favicon.ico" type="image/x-icon"/> 
+<link rel="alternate" type="application/rss+xml" title="RSS Feeds" href="topics/rss/rss.xml" />
+<link rel="search" type="application/opensearchdescription+xml"
+	title="動漫花園" href="/js/dmhy.xml" />
+</head>
+<body>
+<div class="container">
+<div class="bg">
+<div class="header">
+<div class="headerleft" id="top"><a href="/" title="動漫花園資源網"><img alt="動漫花園資源網logo" src="/images/sitelogo.gif"/></a></div>
+<div class="headerright">
+<div class="links">
+<span id="user_cm"></span>
+<a href="/cms/page/name/programme.html" title="連載節目列表(圖像+字幕組分類)">每週番組</a>&nbsp;|
+<a href="/cms/page/name/owari_bangumi.html" title="完結節目列表(圖像+字幕組,按首播季度分類)">完結番組</a>&nbsp;|
+<a href="/cms/page/name/faq.html" title="發問前請先瀏覽" >常見問題<!--<font color=#ff9a4d"><i>更新</i></font>--></a>&nbsp;|
+<a href="/cms/page/name/tos.html" title="請遵守" >服務條款</a>&nbsp;|
+<a href="https://bbs.dmhy.org/thread.php?fid-504.html" target="_blank" title="請勿發表無關問題">意見建議</a>&nbsp;|
+<a href="/cms/page/name/contact-us.html" title="有問題可聯系">聯繫我們</a>&nbsp;|
+<a href="javascript:document.all?window.external.AddFavorite('https://share.dmhy.org', '動漫花園資源網'):(window.sidebar?window.sidebar.addPanel('動漫花園資源網', 'https://share.dmhy.org', ''):alert('Ctrl + D'))" title="添加收藏">收藏花園</a>&nbsp;|&nbsp;<span id="login_cm"></span>
+<script src="//open.thunderurl.com/thunder-link.js"></script>
+<script>
+var _hmt = _hmt || [];
+(function() {
+  var hm = document.createElement("script");
+  hm.src = "https://hm.baidu.com/hm.js?e4918ccc327a268ee93dac21d5a7d53c";
+  var s = document.getElementsByTagName("script")[0];
+  s.parentNode.insertBefore(hm, s);
+})();
+</script>
+<script type="text/javascript">
+if($.cookie('uname')){
+	str = '歡迎您!&nbsp;&nbsp;<span style="color:#FF9A4D;font-weight: bold;">'+decodeURIComponent($.cookie('uname'))+'</span>&nbsp;|&nbsp;';
+	str += '<a href="/user">個人中心</a>&nbsp;|&nbsp;'
+	$('#user_cm').append(str);
+	login = '<a href="/user/logout">退出</a>';
+	$('#login_cm').append(login);
+}else{
+	login = '<a href="/user/login">登入/註冊</a>';
+	$('#login_cm').append(login);
+}
+</script>
+</div>
+<br />
+<div class="ad">
+<!--
+<div id="950_ad" align="center">
+<script> 
+var pic_id = "/95080";
+var random = Math.floor(Math.random()*1+1);
+pic_id = pic_id + random + '.';
+var extension = random == 1 ? 'jpg?6' : 'jpg?6';
+var pic_html = pic_id + extension;
+if(random == 1){
+var href = "#";
+}else if(random == 2){
+var href = "#";
+}else if(random == 3){
+var href = "#";
+}else{
+var href = "#";
+}
+document.getElementById('950_ad').innerHTML='<a onclick="_hmt.push([\'_trackEvent\', \'ad\', \'click\', \'950\'])" href="'+href+'" target="_blank"><img src="' + pic_html + '" width="950" height="80" /></a>';
+</script>
+</div>
+-->
+<script src="https://js.kiwihk.net/?id=dmhy" type="text/javascript"></script>
+<div class="kiwi-ad-wrapper-950x80 kiwi-banner1"></div></div>
+</div>
+<div class="top_sort">
+<div class="menu">
+<ul class="nav">
+	<li> 
+	<a class="sort-2" title="動畫" 
+		href="/topics/list/sort_id/2"><font color=red>動畫</font></a>
+		<ul>
+		<li>
+	<a class="sort-31" title="季度全集" 
+		href="/topics/list/sort_id/31"><b><font color=red>季度全集</font></b></a>
+	</li>
+		</ul>
+		</li>
+	<li> 
+	<a class="sort-3" title="漫畫" 
+		href="/topics/list/sort_id/3"><font color=green>漫畫</font></a>
+		<ul>
+		<li>
+	<a class="sort-41" title="港台原版" 
+		href="/topics/list/sort_id/41"><b><font color=green>港台原版</font></b></a>
+	</li>
+		<li>
+	<a class="sort-42" title="日文原版" 
+		href="/topics/list/sort_id/42"><b><font color=green>日文原版</font></b></a>
+	</li>
+		</ul>
+		</li>
+	<li> 
+	<a class="sort-4" title="音樂" 
+		href="/topics/list/sort_id/4"><font color=purple>音樂</font></a>
+		<ul>
+		<li>
+	<a class="sort-43" title="動漫音樂" 
+		href="/topics/list/sort_id/43"><b><font color=purple>動漫音樂</font></b></a>
+	</li>
+		<li>
+	<a class="sort-44" title="同人音樂" 
+		href="/topics/list/sort_id/44"><b><font color=purple>同人音樂</font></b></a>
+	</li>
+		<li>
+	<a class="sort-15" title="流行音樂" 
+		href="/topics/list/sort_id/15"><b><font color=purple>流行音樂</font></b></a>
+	</li>
+		</ul>
+		</li>
+	<li> 
+	<a class="sort-6" title="日劇" 
+		href="/topics/list/sort_id/6"><font color=blue>日劇</font></a>
+		</li>
+	<li> 
+	<a class="sort-7" title="ＲＡＷ" 
+		href="/topics/list/sort_id/7"><font color=orange>ＲＡＷ</font></a>
+		</li>
+	<li> 
+	<a class="sort-9" title="遊戲" 
+		href="/topics/list/sort_id/9"><font color=#0eb9e7>遊戲</font></a>
+		<ul>
+		<li>
+	<a class="sort-17" title="電腦遊戲" 
+		href="/topics/list/sort_id/17"><font color=#0eb9e7>電腦遊戲</font></a>
+	</li>
+		<li>
+	<a class="sort-18" title="電視遊戲" 
+		href="/topics/list/sort_id/18"><font color=#0eb9e7>電視遊戲</font></a>
+	</li>
+		<li>
+	<a class="sort-19" title="掌機遊戲" 
+		href="/topics/list/sort_id/19"><font color=#0eb9e7>掌機遊戲</font></a>
+	</li>
+		<li>
+	<a class="sort-20" title="網絡遊戲" 
+		href="/topics/list/sort_id/20"><font color=#0eb9e7>網絡遊戲</font></a>
+	</li>
+		<li>
+	<a class="sort-21" title="遊戲周邊" 
+		href="/topics/list/sort_id/21"><font color=#0eb9e7>遊戲周邊</font></a>
+	</li>
+		</ul>
+		</li>
+	<li> 
+	<a class="sort-12" title="特攝" 
+		href="/topics/list/sort_id/12"><font color=brown>特攝</font></a>
+		</li>
+	<li> 
+	<a class="sort-1" title="其他" 
+		href="/topics/list/sort_id/1"><font color=black>其他</font></a>
+		</li>
+<!-- 添加AI女友外链 -->
+
+<li>
+	<a class="sort-ai-girlfriend" title="AI女友💋" href="https://chattinychats.xyz?ref_id=303d92cf-c280-4983-a182-e8bb441f01ed" target="_blank">AI女友💋</a>
+</li>
+
+<!-- 添加AI女友外链结束 -->
+</ul>
+</div>
+
+<div id="expand-button" >
+	<div id="team-expand" >&nbsp;</div>
+	<div id="team-collapse" >&nbsp;</div>
+</div>
+<div id="team-dialog" ></div>
+
+<script type="text/javascript">
+jQuery('#expand-button').click(function(){
+	jQuery('#team-expand').toggle();
+	jQuery('#team-collapse').toggle();
+	jQuery("#team-dialog").toggle();
+
+	if(jQuery('#team-dialog').html() == ""){
+	  var rc_url = '/team/navigate/';
+	  jQuery('#team-dialog').load(rc_url,null,function(){});
+	}
+}); 
+</script><div style="clear:both;"></div>
+</div>
+</div>
+
+<div class="main">
+	<div class="ui-widget">
+		<div style="padding: 15px;" class="ui-state-error ui-corner-all"> 
+		<p><strong>提示信息:</strong></p>
+		<ul>
+			<li class="text_bold text_blue">目标页面没有找到</li>
+		</ul>
+	</div>
+</div>
+</div>
+
+<style type="text/css">
+.ui-widget {width:600px;margin:10px auto; }
+
+.ui-state-error, .ui-state-error {border: 1px solid #cd0a0a; background: #fef1ec; color: #cd0a0a; }
+.ui-state-error a, .ui-state-error a { color: #cd0a0a; }
+.ui-widget-content .ui-state-error-text { color: #cd0a0a; }
+
+.ui-corner-all { -moz-border-radius: 4px; -webkit-border-radius: 4px; }
+.ui-icon-alert {background-position:0 -144px;}
+</style>
+<div class="footer">
+<div class="top"><a href="#top" title="返回頁面頂部">TOP</a></div>
+<!-- Histats.com  (div with counter) --><div id="histats_counter"></div>
+<!-- Histats.com  START  (aync)-->
+<script type="text/javascript">var _Hasync= _Hasync|| [];
+_Hasync.push(['Histats.start', '1,3801674,4,1034,150,25,00010001']);
+_Hasync.push(['Histats.fasi', '1']);
+_Hasync.push(['Histats.track_hits', '']);
+(function() {
+var hs = document.createElement('script'); hs.type = 'text/javascript'; hs.async = true;
+hs.src = ('//s10.histats.com/js15_as.js');
+(document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(hs);
+})();</script>
+<noscript><a href="/" target="_blank"><img  src="//sstatic1.histats.com/0.gif?3801674&101" alt="" border="0"></a></noscript>
+<!-- Histats.com  END  -->
+<div style="clear:both;">
+©2002-2025 <a href="/">動漫花園</a>。</div>
+</div>
+ 
+
+<div style="text-align: center; font: 11px arial; color: #AAA; clear: both;">
+Processed in 0 second(s), 0 queries</div>
+<div
+	style="text-align: center; font: 11px arial; color: #AAA; clear: both;margin-bottom: 10px;">
+Powered by <a style="color: white;" href="http://www.tedmind.com" target="_blank">tedmind.com</a>&nbsp;Version: 1.8.1</div>
+</div>
+</div>
+</body>
+</html>

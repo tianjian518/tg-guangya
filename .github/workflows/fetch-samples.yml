@@ -38,6 +38,10 @@ jobs:
           grab btbtt_s1_juqing.html   "https://btbtt15.com/search-%E5%BA%86%E4%BD%99%E5%B9%B4-sort-create_dt-desc.htm"
           grab btbtt_s2_juqing.html   "https://btbtt15.com/search/thread?keyword=%E5%BA%86%E4%BD%99%E5%B9%B4"
           grab btbtt_home.html        "https://btbtt15.com/"
+          # dmhy 二跳：详情页磁力格式 + 国产剧覆盖验证（狂飙 = 2023 国产剧爆款）
+          grab dmhy_detail.html       "http://share.dmhy.org/topics/view/722515_GM-Team_5_Fights_Break_Sphere_2022_207_HEVC_GB_4K.html"
+          grab dmhy_cn_kuangbiao.xml  "https://share.dmhy.org/topics/rss?keyword=%E7%8B%82%E9%A3%99"
+          grab dmhy_cn_doupo_p1.xml   "https://share.dmhy.org/topics/rss?keyword=%E5%B0%8F%E7%8C%AA%E4%BD%A9%E5%A5%87"
           ls -la samples/
       - name: Commit samples to branch
         run: |
