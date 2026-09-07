@@ -507,10 +507,14 @@ def analyze(title: str) -> ResourceInfo:
     # 组装文件夹名
     if info.sig:
         folder = f"{info.core}.{info.sig.upper()}" if info.core else info.sig.upper()
+        # 整季包范围（S01-S12）：媒体库风格年份进 folder；单集/单季年份归剧名文件夹
+        if info.year and re.match(r"(?i)s01-s\d{2}$", info.sig):
+            folder = f"{info.core} ({info.year}) {info.sig.upper()}"
     else:
         folder = info.core
         if info.year:
-            folder = f"{info.core}.{info.year}" if info.core else str(info.year)
+            # 年份用「片名 (年份)」媒体库格式（Emby/TMDB 风格），片名与年份间留英文空格
+            folder = f"{info.core} ({info.year})" if info.core else str(info.year)
     if not folder:
         folder = "影视资源"
     info.folder = folder
@@ -524,10 +528,10 @@ def folder_name(title: str) -> str:
 
 
 def show_folder(title: str) -> str:
-    """对外：剧集的「剧名文件夹」名（剧名.年份，不带集数/季号）。
+    """对外：剧集的「剧名文件夹」名（剧名 (年份)，不带集数/季号）。
 
     需求：一部电视剧一个文件夹，同一部剧的各集都收进
-    分类目录/剧名.年份/ 下（如 国产剧/夏季.2026/夏季.S01E04.mkv）。
+    分类目录/剧名 (年份)/ 下（如 国产剧/夏季 (2026)/夏季.S01E04.mkv）。
     非剧集（无 sig）返回 analyze(title).folder（与落盘名一致）。
     """
     info = analyze(title)
@@ -535,7 +539,7 @@ def show_folder(title: str) -> str:
         return info.folder
     name = info.core
     if info.year:
-        name = f"{name}.{info.year}"
+        name = f"{name} ({info.year})"
     return name
 
 

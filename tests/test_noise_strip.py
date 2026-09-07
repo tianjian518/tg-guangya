@@ -81,8 +81,8 @@ def test_resolution_codec_glued_no_boundary():
     # H.265 后直接跟体积数字，因 \b 在两字母/数字间不存在而整段漏剥。
     # 中文标题做精确断言；英文标题只验证技术 token 被剥离（译名随字典变化，不硬编码）。
     exact = {
-        "耳语人 (2026) 2160pH.26515.78 GB": "耳语人.2026",
-        "英雄 2026 2160pH265 12.3GB": "英雄.2026",
+        "耳语人 (2026) 2160pH.26515.78 GB": "耳语人 (2026)",
+        "英雄 2026 2160pH265 12.3GB": "英雄 (2026)",
     }
     for raw, folder in exact.items():
         got = analyze(raw).folder

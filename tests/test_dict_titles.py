@@ -1,7 +1,7 @@
 """截图标题字典覆盖回归测试。
 
 用户的核心诉求：「无论是频道里的链接，还是发给机器人的链接，都要改成中文，然后落到云盘里。」
-本测试用用户贴出的截图里那 9 条真实标题，钉死「最终落盘文件夹名 = 中文片名.年份」。
+本测试用用户贴出的截图里那 9 条真实标题，钉死「最终落盘文件夹名 = 中文片名 (年份)」。
 
 直接用 analyze() 跑（与运行时一致），断言 folder 字段就是正确的中文落盘名。
 注意：这里只验证「命名」，分类目录归属由 test_phrase_region.py 覆盖。
@@ -20,17 +20,17 @@ from core.ident import analyze
 
 # (真实噪杂标题, 期望的落盘文件夹名)
 SCREENSHOT_CASES = [
-    ("Searching.2018.1080p.FGT",                       "网络谜踪.2018"),
-    ("Oceans.Thirteen.2007.4kTRASH",                   "十三罗汉.2007"),
-    ("Oceans.Eleven.2001.4kTRASH",                     "十一罗汉.2001"),
-    ("Novembre.2022.FRENCH.60FPS.H.265",               "十一月.2022"),
-    ("New Dragon Gate Inn [1992] 1080p BluRay",         "新龙门客栈.1992"),
-    ("House.On.The.Edge.Of.The.Park.1980.ITALIAN.mkv", "公园边缘的房子.1980"),
+    ("Searching.2018.1080p.FGT",                       "网络谜踪 (2018)"),
+    ("Oceans.Thirteen.2007.4kTRASH",                   "十三罗汉 (2007)"),
+    ("Oceans.Eleven.2001.4kTRASH",                     "十一罗汉 (2001)"),
+    ("Novembre.2022.FRENCH.60FPS.H.265",               "十一月 (2022)"),
+    ("New Dragon Gate Inn [1992] 1080p BluRay",         "新龙门客栈 (1992)"),
+    ("House.On.The.Edge.Of.The.Park.1980.ITALIAN.mkv", "公园边缘的房子 (1980)"),
     ("周星驰大话西游系列 1080p",                          "周星驰大话西游系列"),
-    ("Titanic.1997.BONE.mkv",                          "泰坦尼克号.1997"),
-    ("Cold.War.1994.2026.1080p.HiveWeb.mkv",           "冷战.1994"),
+    ("Titanic.1997.BONE.mkv",                          "泰坦尼克号 (1997)"),
+    ("Cold.War.1994.2026.1080p.HiveWeb.mkv",           "冷战 (1994)"),
     # 旧版直接「拒绝」的纯英文片，现要求落盘（译得出中文就译）
-    ("Oppenheimer.2023.4K.WEB-DL.English",             "奥本海默.2023"),
+    ("Oppenheimer.2023.4K.WEB-DL.English",             "奥本海默 (2023)"),
 ]
 
 

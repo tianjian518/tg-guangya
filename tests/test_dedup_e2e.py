@@ -314,7 +314,7 @@ def test_cases():
     d = dd.decide("h_opp2", "Oppenheimer 2023 4K WEB-DL English", st)
     results.append(("不丢资源/英文片译中文后落盘", "transfer", d.action))
     info28 = ident_analyze("Oppenheimer 2023 4K WEB-DL English")
-    results.append(("不丢资源/落盘名为中文", "奥本海默.2023", info28.folder))
+    results.append(("不丢资源/落盘名为中文", "奥本海默 (2023)", info28.folder))
 
     # 29) 【整理归类准入】自动分类被关闭 → 没归类可进 → 一律放弃（不许裸丢根目录）
     cfg2 = AppConfig.load(str(BASE / "data" / "config.yaml"))

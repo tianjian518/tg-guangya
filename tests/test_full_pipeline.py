@@ -197,11 +197,11 @@ def test_bt_folder_renamed_to_cn():
     assert "欧美电影" in tree, f"应自动建分类目录，实际 {list(tree)}"
     cat_west = next(e["file_id"] for e in client.list_dir("") if e["name"] == "欧美电影")
     names_west = [e["name"] for e in client.list_dir(cat_west)]
-    assert "网络谜踪.2018" in names_west, f"欧美电影目录下应有中文名产物，实际 {names_west}"
+    assert "网络谜踪 (2018)" in names_west, f"欧美电影目录下应有中文名产物，实际 {names_west}"
     assert en not in names_west, "英文原名应已消失"
     rec = store.history(limit=10)[0]
     assert rec.status == "done" and rec.renamed == 1, f"落库应为 done/renamed=1: {rec.status}/{rec.renamed}"
-    assert rec.cn_folder == "网络谜踪.2018"
+    assert rec.cn_folder == "网络谜踪 (2018)"
     print("  OK 磁力 → 欧美电影/网络谜踪.2018（文件夹已改名，store renamed=1）")
 
 
@@ -231,11 +231,11 @@ def test_single_file_artifact_renamed_with_ext():
     handler(Msg(f"流浪地球2 The.Wandering.Earth.II.2023.1080p.WEB-DL.HC.mkv {url}", [url], message_id="m3"))
     cn_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "华语电影")
     names = [e["name"] for e in client.list_dir(cn_dir)]
-    assert "流浪地球2.2023.mkv" in names, f"应保留扩展名的中文名，实际 {names}"
+    assert "流浪地球2 (2023).mkv" in names, f"应保留扩展名的中文名，实际 {names}"
     assert en not in names, "英文原名应已消失"
     rec = store.history(limit=10)[0]
     assert rec.renamed == 1 and rec.status == "done"
-    print("  OK 直链 → 华语电影/流浪地球2.2023.mkv（文件已改名+扩展名保留）")
+    print("  OK 直链 → 华语电影/流浪地球2 (2023).mkv（文件已改名+扩展名保留）")
 
 
 def test_chinese_title_goes_cn_category():
@@ -246,7 +246,7 @@ def test_chinese_title_goes_cn_category():
     handler(Msg("【4K】流浪地球 The.Wandering.Earth 2019 国语中字 " + url, [url], message_id="m4"))
     cn_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "华语电影")
     names = [e["name"] for e in client.list_dir(cn_dir)]
-    assert "流浪地球.2019" in names, f"应落华语电影/流浪地球.2019，实际 {names}"
+    assert "流浪地球 (2019)" in names, f"应落华语电影/流浪地球 (2019)，实际 {names}"
     print("  OK 中文标题 → 华语电影/流浪地球.2019")
 
 
@@ -280,8 +280,8 @@ def test_timeout_task_completed_by_monitor():
     assert rec2.status == "done" and rec2.renamed == 1, f"监控补改后应 done/1，实际 {rec2.status}/{rec2.renamed}"
     hw = next(e["file_id"] for e in client.list_dir("") if e["name"] == "华语电影")
     names = [e["name"] for e in client.list_dir(hw)]
-    assert "冷战.1994" in names and en not in names, f"云盘应有中文名，实际 {names}"
-    print("  OK 超时任务 → 监控补改名 → 华语电影/冷战.1994（香港片，region=cn 正确）")
+    assert "冷战 (1994)" in names and en not in names, f"云盘应有中文名，实际 {names}"
+    print("  OK 超时任务 → 监控补改名 → 华语电影/冷战 (1994)（香港片，region=cn 正确）")
 
 
 def test_episode_files_collected_into_show_folder():
@@ -292,9 +292,9 @@ def test_episode_files_collected_into_show_folder():
     handler(Msg(f"夏季.2026.S01E04.第4集.2160p.IQ.WEB-DL.H.265.mkv {u1}", [u1], message_id="m6"))
     tv_dir = next(e["file_id"] for e in client.list_dir("") if e["name"] == "国产剧")
     tv_names = [e["name"] for e in client.list_dir(tv_dir)]
-    assert "夏季.2026" in tv_names, f"国产剧下应有剧名文件夹，实际 {tv_names}"
+    assert "夏季 (2026)" in tv_names, f"国产剧下应有剧名文件夹，实际 {tv_names}"
     assert en1 not in tv_names, "单集文件不应平铺在分类目录"
-    show_id = next(e["file_id"] for e in client.list_dir(tv_dir) if e["name"] == "夏季.2026")
+    show_id = next(e["file_id"] for e in client.list_dir(tv_dir) if e["name"] == "夏季 (2026)")
     inner = [e["name"] for e in client.list_dir(show_id)]
     assert "夏季.S01E04.mkv" in inner, f"剧名文件夹里应有改名后的单集，实际 {inner}"
     print("  OK 单集 → 国产剧/夏季.2026/夏季.S01E04.mkv")

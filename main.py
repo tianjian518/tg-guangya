@@ -566,19 +566,22 @@ def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
             # 真实名常带季数签名（S01-S12 / S02），标题可能没有 → 从真实名补回季数
             sig = re.search(r"\.(s\d{1,2}(?:e\d{1,3})?(?:-s\d{1,2})?)\b", primary, re.I)
             if sig and sig.group(1).lower() not in t_folder.lower():
-                t_folder = f"{t_folder}.{sig.group(1)}"
+                # t_folder 以「(年份)」收尾（媒体库格式）时空格分隔，否则沿用点分隔
+                sep = " " if t_folder.endswith(")") else "."
+                t_folder = f"{t_folder}{sep}{sig.group(1)}"
             cn_folder = t_folder
     # 辅助②：命名缺年份时，拿标题里的年份补上（如「小猪佩奇.S01-S12」+「(2004)」
-    # → 小猪佩奇.2004.S01-S12）；整季范围（X.S01-SNN）则把年份插到片名与范围之间。
+    # → 小猪佩奇 (2004) S01-S12）；整季范围（X.S01-SNN）则把年份插到片名与范围之间。
     if cn_folder and title:
         m = re.search(r"\(?(\d{4})\)?", title)
         if m and m.group(1) not in cn_folder:
             yr = m.group(1)
             # 单集/单季签名（.SxxExx / .Sxx 词尾）：年份归剧名文件夹，文件名不再塞年份；
-            # 仅整季范围（.S01-S12）保留年份（小猪佩奇.2004.S01-S12）。
+            # 仅整季范围（.S01-S12）保留年份（小猪佩奇 (2004) S01-S12）。
             if not re.search(r"\.s0?\d(?:e0?\d)?$", cn_folder, re.I):
                 rng = re.match(r"^(.+?)\.(s0?\d-s0?\d)$", cn_folder, re.I)
-                cn_folder = f"{rng.group(1)}.{yr}.{rng.group(2)}" if rng else f"{cn_folder}.{yr}"
+                cn_folder = (f"{rng.group(1)} ({yr}) {rng.group(2)}" if rng
+                             else f"{cn_folder} ({yr})")
     show_dir = ""
     if primary or title:
         try:

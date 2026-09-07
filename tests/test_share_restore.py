@@ -325,11 +325,11 @@ def test_submit_share_movie_single_file():
     ok, task_id, name, status, rename_ok, cn_folder = _run_share(
         "https://www.guangyapan.com/share/mv1", sim, "阿凡达 2009 4K")
     assert ok and status == "done" and task_id == "rt-mv1", (ok, status, task_id)
-    assert cn_folder == "阿凡达.2009", cn_folder
+    assert cn_folder == "阿凡达 (2009)", cn_folder
     assert rename_ok is True
     # 单文件保留扩展名改名
     assert ("Avatar.2009.2160p.mkv" not in sim.dirs["cat-dir"])
-    assert any(n.startswith("阿凡达.2009.") and n.endswith(".mkv")
+    assert any(n.startswith("阿凡达 (2009).") and n.endswith(".mkv")
                for n in sim.dirs["cat-dir"]), sim.dirs["cat-dir"]
 
 
@@ -343,7 +343,7 @@ def test_submit_share_episode_into_show_dir():
     assert cn_folder == "夏季.S01E04", cn_folder
     # 单集收进剧名文件夹（桶按 fileId 组织：先找剧名文件夹的 fid 再看桶内）
     show_fid = next(fid for n, (fid, rt) in sim.dirs["cat-dir"].items()
-                    if n == "夏季.2026" and rt == 2)
+                    if n == "夏季 (2026)" and rt == 2)
     show = sim.dirs.get(show_fid) or {}
     assert any(n.startswith("夏季.S01E04") for n in show), sim.dirs
     assert not any("S01E04" in n for n in sim.dirs["cat-dir"]), sim.dirs["cat-dir"]
@@ -374,7 +374,7 @@ def test_submit_share_multi_entries_collected():
         "https://www.guangyapan.com/share/set1", sim, "哪吒之魔童闹海 2019")
     assert ok and rename_ok is True, (ok, rename_ok)
     sub_fid = next(fid for n, (fid, rt) in sim.dirs["cat-dir"].items()
-                   if n == "哪吒之魔童闹海.2019" and rt == 2)
+                   if n == "哪吒之魔童闹海 (2019)" and rt == 2)
     sub = sim.dirs.get(sub_fid) or {}
     assert {"Part1.mkv", "Part2.mkv", "Extras"} <= set(sub), sim.dirs
 
@@ -451,7 +451,7 @@ def test_submit_share_real_name_en_title_cn_fallback():
     ok, task_id, name, status, rename_ok, cn_folder = _run_share(
         "https://www.guangyapan.com/share/real2", sim, "小猪佩奇 (2004)")
     assert ok and rename_ok is True, (ok, rename_ok)
-    assert cn_folder == "小猪佩奇.2004.S01-S12", cn_folder
+    assert cn_folder == "小猪佩奇 (2004) S01-S12", cn_folder
 
 
 # ======================================================================
@@ -518,7 +518,7 @@ def test_extract_share_title_real_channel_samples():
     from core.naming import build_cn_filename
     assert build_cn_filename(t) == "囧徒之预演告别.S01E10", t
     assert build_cn_filename(f("交锋--首更至3集-4稍后--无任何广-4K\n🅶" + u1, u1)) == "交锋.S01E03"
-    assert build_cn_filename("四骑士 (1972)") == "四骑士.1972"
+    assert build_cn_filename("四骑士 (1972)") == "四骑士 (1972)"
 
 
 def test_extract_share_title_fallbacks():
