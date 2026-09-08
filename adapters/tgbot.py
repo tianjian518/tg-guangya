@@ -418,7 +418,11 @@ class TgBot:
         @bot.message_handler(func=lambda m: True, content_types=["text"])
         def _text(message):
             uid = message.from_user.id if message.from_user else 0
+            # 收消息必须留痕：此前收到消息后完全无日志，丢消息时无从排查
+            log.info("bot 收到消息: uid=%s chat=%s 文本=%r",
+                     uid, message.chat.id, (message.text or "")[:60])
             if not self.allowed(uid):
+                log.info("bot 拒绝非管理员: uid=%s", uid)
                 return self._deny(message.chat.id)
             if self._on_submit is None:
                 self._send(message.chat.id, "提交功能未就绪")
