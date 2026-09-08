@@ -52,7 +52,7 @@ class UserbotSource:
     """
 
     def __init__(self, api_id: str, api_hash: str, session: str, channels: list[str],
-                 proxy: str = "", comments=None) -> None:
+                 proxy: str = "", comments=None, history_pages: int = 0) -> None:
         try:
             from telethon import TelegramClient  # noqa: F401
         except ImportError as exc:  # 未安装 telethon 时给出友好提示
@@ -65,6 +65,7 @@ class UserbotSource:
         self.channels = [c.lstrip("@").strip("/") for c in channels if c]
         self.proxy = parse_proxy(proxy)
         self.comments = comments or CommentsConfig()
+        self.history_pages = max(0, int(history_pages))
         self._client = None
         self._handlers: list[Callable[[ChannelMessage], None]] = []
 
@@ -105,6 +106,9 @@ class UserbotSource:
         if self._client is not None:
             try:
                 await self._client.disconnect()
+                # disconnect() 只断网络连接，不关 SQLite session 文件句柄；
+                # 不 close 的话面板进程会一直锁着 session，worker 连不上。
+                self._client.session.close()
             except Exception:
                 pass
 
@@ -145,6 +149,28 @@ class UserbotSource:
             client.add_event_handler(handler, events.NewMessage(chats=entities))
         else:
             log.warning("没有可监听的频道实体，userbot 将以空转方式保持连接")
+
+        # 启动补抓历史（与 web 模式 scan_history 对齐；DB 判重兜底，重复无害）
+        if self.history_pages and entities:
+            for ent in entities:
+                title = getattr(ent, "username", "") or str(getattr(ent, "id", ""))
+                try:
+                    n = 0
+                    async for msg in client.iter_messages(
+                        ent, limit=self.history_pages * 50
+                    ):
+                        cm = await self._handle(client, msg)
+                        if cm is None:
+                            continue
+                        n += 1
+                        for cb in self._handlers:
+                            try:
+                                cb(cm)
+                            except Exception as exc:
+                                log.warning("处理历史消息失败: %s", exc)
+                    log.info("历史扫描完成 %s：%d 帖", title, n)
+                except Exception as exc:
+                    log.warning("历史扫描 %s 出错: %s", title, exc)
 
         log.info("开始监听 %d 个频道...", len(entities))
         await client.run_until_disconnected()

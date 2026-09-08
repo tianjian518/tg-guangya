@@ -423,12 +423,13 @@ def test_submit_share_unparsable_title_uses_real_name():
     ok, task_id, name, status, rename_ok, cn_folder = _run_share(
         "https://www.guangyapan.com/share/raw1", sim, "🔥🔥🔥")
     assert ok and status == "done" and rename_ok is True, (ok, status, rename_ok)
-    # 命名主源 = 真实名（Some.Show.S01E01.mp4 → SomeShow.S01E01），与无效标题 🔥🔥🔥 无关
-    assert cn_folder == "SomeShow.S01E01", cn_folder
+    # 命名主源 = 真实名（Some.Show.S01E01.mp4 → Some Show.S01E01，剥点后
+    # 驼峰拆词保持可读），与无效标题 🔥🔥🔥 无关
+    assert cn_folder == "Some Show.S01E01", cn_folder
     assert rename_ok is True
     # 原始名经 _entry_key 归一化（点被忽略）后等价于规范名 → 视为已达标、保留原名（合理行为）
     assert ("Some.Show.S01E01.mp4" in sim.dirs["cat-dir"]
-            or any(n.startswith("SomeShow.S01E01") for n in sim.dirs["cat-dir"])), sim.dirs["cat-dir"]
+            or any(n.startswith("Some Show.S01E01") for n in sim.dirs["cat-dir"])), sim.dirs["cat-dir"]
 
 
 def test_submit_share_names_from_share_real_name():

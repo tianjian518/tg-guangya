@@ -366,6 +366,16 @@ class CloudDedup:
             self._dir_cache[parent_id] = (now, entries)
         return entries
 
+    def invalidate_dir(self, parent_id: str) -> None:
+        """落盘成功后清掉该目录的查重缓存。
+
+        否则同一条消息里先后两个链接落同一目录时，后一个会用旧缓存
+        误判「云端还没有」→ 绕过去重重复转存（实测同一分享挂两个标题
+        连转两次：性诊室告白 + 仙武传，内容与名字不符）。
+        """
+        with self._lock:
+            self._dir_cache.pop(parent_id, None)
+
     def _find_existing(self, category: str, info) -> dict | None:
         """在云端找同名同内容条目。先精确（我们的标准 folder 名），再模糊（历史命名兜底）。
 

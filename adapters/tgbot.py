@@ -147,7 +147,10 @@ class TgBot:
             apihelper.proxy = {"http": self.proxy, "https": self.proxy}
             log.info("TG 机器人走代理: %s", self.proxy)
 
-        self._bot = telebot.TeleBot(self.token, parse_mode="Markdown")
+        # 不设全局 parse_mode：旧版 telebot 里 send_message(parse_mode=None)
+        # 覆盖不了全局 Markdown，导致纯文本降级重发照样炸解析（实测）。
+        # 改为发送时显式传，降级路径才能真正去掉格式。
+        self._bot = telebot.TeleBot(self.token)
         self._register(telebot)
         log.info("TG 机器人已启动（管理员 %d 位）", len(self.admin_ids))
 
@@ -286,6 +289,7 @@ class TgBot:
             # 超长消息分段发，避免超过 TG 4096 字符上限
             for i in range(0, len(text), 3500):
                 self._bot.send_message(chat_id, text[i:i + 3500],
+                                       parse_mode="Markdown",
                                        disable_web_page_preview=True)
         except Exception:
             # Markdown 解析失败（光鸭链接里的下划线被当成斜体标记）→ 纯文本重发

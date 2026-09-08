@@ -54,6 +54,7 @@ class MediaMeta:
     year: int = 0
     region: str = ""              # 折算后的地区码 cn / jpkr / west / other
     source: str = ""              # dict / user_dict / tmdb / cache
+    orig_name: str = ""           # TMDB 原始英文名（如 "Toy Story 5"），用于补回系列号
 
 
 def normalize_en(s: str) -> str:
@@ -1673,8 +1674,8 @@ def _tmdb_proxy() -> str:
 _tmdb_proxy_cache = None  # type: Optional[str]
 
 
-def _tmdb_search(query: str, kind: str, key: str) -> Optional[dict]:
-    """查 TMDB 的 /search/movie 或 /search/tv，返回命中的第一条。
+def _tmdb_search(query: str, kind: str, key: str, year: int = 0) -> Optional[dict]:
+    """查 TMDB 的 /search/movie 或 /search/tv，返回最佳命中。
 
     配了 sources.proxy 就先走代理；代理失败再裸连一次（有的机器直连反而通）。
     """
@@ -1682,6 +1683,9 @@ def _tmdb_search(query: str, kind: str, key: str) -> Optional[dict]:
         f"https://api.themoviedb.org/3/search/{kind}"
         f"?query={urllib.parse.quote(query)}&language=zh-CN&api_key={key}"
     )
+    if year:
+        # 带年份过滤能显著压低同系列旧作的干扰（"Toy Story 5" 不再命中 1995）
+        url += f"&year={year}" if kind == "movie" else f"&first_air_date_year={year}"
     req = urllib.request.Request(url, headers={"User-Agent": "tg-guangya/1.6"})
     proxy = _tmdb_proxy()
     if proxy:
@@ -1690,21 +1694,27 @@ def _tmdb_search(query: str, kind: str, key: str) -> Optional[dict]:
                 {"http": proxy, "https": proxy}))
             with opener.open(req, timeout=6) as resp:
                 data = json.loads(resp.read())
-            return _first_tmdb_result(data)
+            return _first_tmdb_result(data, query)
         except Exception:
             pass  # 代理抖了 → 落到下面的直连兜底
     with urllib.request.urlopen(req, timeout=6) as resp:
         data = json.loads(resp.read())
-    return _first_tmdb_result(data)
+    return _first_tmdb_result(data, query)
 
 
-def _first_tmdb_result(data: dict) -> Optional[dict]:
-    """从 /search 响应里取第一条有效结果。"""
+def _first_tmdb_result(data: dict, query: str = "") -> Optional[dict]:
+    """从 /search 响应里挑最佳结果：原名与查询串精确一致者优先，否则取首条。
+
+    首条是热度序——"KPop Demon Hunters" 会命中同名合辑条目（Collection），
+    "Toy Story 5" 会命中 1995 年第一部；只有原名精确匹配才拿得准。
+    """
+    nq = normalize_en(query) if query else ""
+    first: Optional[dict] = None
     for r in data.get("results") or []:
         title = (r.get("title") or r.get("name") or "").strip()
         if not title:
             continue
-        return {
+        cand = {
             "cn_name": title,
             "orig_name": (r.get("original_title") or r.get("original_name") or "").strip(),
             "original_language": (r.get("original_language") or "").strip(),
@@ -1715,7 +1725,11 @@ def _first_tmdb_result(data: dict) -> Optional[dict]:
             "genre_ids": [int(g) for g in (r.get("genre_ids") or []) if g is not None],
             "source": "tmdb",
         }
-    return None
+        if first is None:
+            first = cand
+        if nq and normalize_en(cand["orig_name"]) == nq:
+            return cand
+    return first
 
 
 # TMDB genre_id → 本项目内容形态（KIND_*）。只映射有把握的：
@@ -1738,6 +1752,50 @@ def _genre_to_kind(genre_ids: list) -> str:
     return ""
 
 
+def _clean_tmdb_query(q: str) -> str:
+    """TMDB 查询串净化：中英混串里的拉丁发布词/数字全是噪声。
+
+    「琅琊榜之风起长林 (2017) 50集 Nirvana.in.Fire.Ⅱ.4k&1080p.WEB-DL」
+    整串丢给 TMDB 全文搜索会撞上西文垃圾条目，original_language=en
+    反过来把华语剧压成欧美（欧美剧 88% 置信度的事故）。中文 query 只取
+    最长的连续中文段；纯拉丁标题不动（那是 _lookup_en 链路的事）。
+    """
+    if not q or not _CJK.search(q):
+        return q
+    segs = re.findall(r"[一-鿿]{2,}", q)
+    if not segs:
+        return q
+    # 「4K和1080P」粘连会把连接词「和」带进段尾 → TMDB 查不到。
+    # 剥掉段尾的单字虚词再取最长段。
+    segs = [re.sub(r"[和与及或的之了]$", "", s) or s for s in segs]
+    return max(segs, key=len)
+
+
+def _hit_relevant(hit: dict, query: str) -> bool:
+    """TMDB 命中条目与中文 query 的相关性校验（防垃圾命中判地区）。
+
+    混串模糊搜索撞上的西文条目与 query 零重叠——它的 original_language
+    不能作为地区证据。条目名（cn_name / orig_name）与 query 出现
+    2 字连续子串重叠才算相关；纯拉丁 query 不校验（英文链路自有
+    exact_first 精确匹配把关）。
+    """
+    if not _CJK.search(query):
+        return True
+    q = re.sub(r"[\s，。·：:（）()\-]+", "", query)
+    for n in (hit.get("cn_name"), hit.get("orig_name")):
+        n2 = re.sub(r"[\s，。·：:（）()\-]+", "", n or "")
+        if not n2:
+            continue
+        if n2 in q or q in n2:
+            return True
+        if _CJK.search(n2):
+            qgrams = {q[i:i + 2] for i in range(len(q) - 1)}
+            ngrams = {n2[i:i + 2] for i in range(len(n2) - 1)}
+            if qgrams & ngrams:
+                return True
+    return False
+
+
 def _tmdb_lookup(query: str, year: int = 0, kinds: tuple = ("movie", "tv"),
                  exact_first: bool = False) -> Optional[dict]:
     """查 TMDB，默认先电影后剧集（追剧资源以前查不到就是漏了 tv）。
@@ -1749,30 +1807,35 @@ def _tmdb_lookup(query: str, year: int = 0, kinds: tuple = ("movie", "tv"),
       也不能把《仙逆》补成《仙逆剧场版》的年份。
     """
     key = _tmdb_key()
+    query = _clean_tmdb_query(query)
     if not key or not query:
         return None
     global _fail_count, _fail_until
     if time.time() < _fail_until:
         return None
     fallback: Optional[dict] = None
-    for kind in kinds:
-        try:
-            hit = _tmdb_search(query, kind, key)
-        except Exception:
-            _fail_count += 1
-            if _fail_count >= _FAIL_LIMIT:
-                _fail_until = time.time() + _FAIL_COOLDOWN
+    # 先带年份查（同系列新作不再被旧作挡道），落空再不带年份兜底——
+    # 标题里的年份可能是压制发布年而非首播年，不能一票否决。
+    attempts = [(year or 0, kinds)] + ([(0, kinds)] if year else [])
+    for yy, kk in attempts:
+        for kind in kk:
+            try:
+                hit = _tmdb_search(query, kind, key, year=yy)
+            except Exception:
+                _fail_count += 1
+                if _fail_count >= _FAIL_LIMIT:
+                    _fail_until = time.time() + _FAIL_COOLDOWN
+                    _fail_count = 0
+                continue
+            # 年份对不上可接受——TMDB 首个结果未必精确，但译名通常是对的
+            if hit and _hit_relevant(hit, query):
                 _fail_count = 0
-            continue
-        # 年份对不上可接受——TMDB 首个结果未必精确，但译名通常是对的
-        if hit:
-            _fail_count = 0
-            if not exact_first:
-                return hit
-            if (hit.get("cn_name") == query
-                    or normalize_en(hit.get("orig_name", "")) == normalize_en(query)):
-                return hit
-            fallback = fallback or hit
+                if not exact_first:
+                    return hit
+                if (hit.get("cn_name") == query
+                        or normalize_en(hit.get("orig_name", "")) == normalize_en(query)):
+                    return hit
+                fallback = fallback or hit
     return fallback
 
 
@@ -1792,12 +1855,14 @@ def lookup(title: str, year: int = 0) -> MediaMeta:
     with _lock:
         hit = _mem_cache.get(key)
         if hit is not None:
-            return MediaMeta(**hit)
+            return MediaMeta(**{k: v for k, v in hit.items()
+                                if k in MediaMeta.__dataclass_fields__})
         _load_disk_cache()
         hit = _disk_cache.get(key)
         if hit is not None:
             _mem_cache[key] = hit
-            return MediaMeta(**hit)
+            return MediaMeta(**{k: v for k, v in hit.items()
+                                if k in MediaMeta.__dataclass_fields__})
 
         out: dict = {}
         norm = normalize_en(title)
@@ -1842,6 +1907,9 @@ def lookup(title: str, year: int = 0) -> MediaMeta:
                     out["region"] = out.get("region") or tm.get("region", "")
                     if not out.get("year"):
                         out["year"] = tm.get("year", 0)
+                    # 字典译名常不带系列号（"toystory5"→"玩具总动员"），
+                    # 把 TMDB 的原始英文名也带回去，供上层补号逻辑对照
+                    out["orig_name"] = tm.get("orig_name", "")
                     out["source"] += "+tmdb"
                 else:
                     out = tm
@@ -1858,7 +1926,10 @@ def lookup(title: str, year: int = 0) -> MediaMeta:
             # 每个新查询都落盘代价太高，攒够 20 条或每 10 条写一次
             if len(_disk_cache) % 10 == 0:
                 _save_disk_cache()
-        return MediaMeta(**out)
+        # out 可能带 lookup 之外的字段（如 orig_name），按 dataclass 字段过滤，
+        # 否则字段漂移会让 MediaMeta(**out) 直接 TypeError（KPop 猎魔女团的教训）
+        return MediaMeta(**{k: v for k, v in out.items()
+                            if k in MediaMeta.__dataclass_fields__})
 
 
 def region_of(title: str, year: int = 0) -> str:

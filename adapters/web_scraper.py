@@ -76,9 +76,11 @@ def link_key(url: str) -> str:
         return m.group(1).lower()
     # 分享链接用 shareId 做主键：同一分享的 code/shareCode query 可能各处写法不同，
     # /s/ 与 /share/ 两种路径也要归到同一键；shareId 才是内容的稳定标识。
+    # 注意 shareId 后面可能跟 _提取码（如 /s/123_al8cmYXLP9l33ld2），必须截掉——
+    # 否则同一分享换个 code 写法（或有的链接不带码）就被当成两个资源重复转存。
     sm = re.search(r"guangyapan\.com/(?:share|s)/([A-Za-z0-9_-]+)", url, re.I)
     if sm:
-        return f"guangya:{sm.group(1).lower()}"
+        return f"guangya:{sm.group(1).split('_')[0].lower()}"
     return url.lower().rstrip(".,;，。；")
 
 

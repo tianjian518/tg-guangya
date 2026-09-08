@@ -952,6 +952,29 @@ class GuangyaClient:
         data = self._api_post("/userres/v1/restore_share", body) or {}
         return (data.get("taskId") or "").strip()
 
+    def peek_share_names(self, url: str) -> list[str]:
+        """转存前先探分享里的【真实文件名】（需提取码的分享探不到，返回空）。
+
+        用途：分类与命名要以分享的真实内容为准，而不是频道发帖标题——
+        实测同一条发帖「【电影】阴风诡影」下的三个分享，真实内容分别是
+        「囧徒之预演告别」「吞噬星空」等，按发帖标题分类会全落进同一个目录。
+        任何异常（失效/需码/网络/限额）都吞掉返回空，调用方退回原标题。
+        """
+        p = parse_share_url(url)
+        if not p:
+            return []
+        try:
+            summary = self.get_share_summary(p["share_id"])
+            if summary.get("needCode"):
+                return []
+            access = self.get_share_access_token(p["share_id"], p.get("code") or "")
+            names = [(e.get("name") or "").strip()
+                     for e in self.list_share_all_files(access)]
+            return [n for n in names if n]
+        except Exception as exc:  # noqa: BLE001 - 探名失败不影响后续转存
+            log.warning("预览分享内容失败（将按发帖标题分类）: %s", exc)
+            return []
+
     def save_share(self, url: str, parent_id: str, timeout: int = 120) -> dict:
         """识别分享链接并整体转存到 parent_id，返回执行摘要。
 

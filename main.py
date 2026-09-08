@@ -33,7 +33,7 @@ from core.guangya import (
 )
 from core.store import Store, MagnetRecord, TitleRecord
 from core.matcher import KeywordFilter, parse_title
-from core.naming import build_cn_filename
+from core.naming import build_cn_filename, build_cn_filename_from, link_filename
 from core.notifier import Notifier
 from core.config import AppConfig
 from core.discovery import ChannelDiscovery
@@ -108,6 +108,56 @@ def _entry_key(name: str) -> str:
     文件夹名原样（无扩展名可去）；单集文件去掉 .mkv 等尾巴后与 cn_folder 同规。
     """
     return _norm_full(_VIDEO_EXT_RE.sub("", name or ""))
+
+
+def _verify_landed(client, parent_id: str, cn_folder: str, orig_name: str = "") -> bool:
+    """转存完成后确认产物真的躺在目标目录里。
+
+    实测出现过：任务状态 done、数据库记了目录，但目录里一条都没有
+    （文件被移动/删除/落到了别处）。这类"假成功"必须在落盘当刻就发现，
+    否则用户只会看到"转存成功"的通知、盘里却找不到东西。
+    校验不了（无目录/无规范名/接口异常）一律放行，避免误报刷屏。
+    """
+    if not cn_folder or not parent_id:
+        return True
+    try:
+        items = client.list_dir(parent_id)
+    except Exception:  # noqa: BLE001 - 查不动就不校验
+        return True
+    keys = {_entry_key(i.get("name") or "") for i in items}
+    cands = {_entry_key(cn_folder)}
+    # 单集被收进剧名文件夹时，目录里只有「剧名 (年份)」没有 SxxExx 尾巴
+    bare = re.sub(r"(?i)[\s.]*s\d{1,2}(?:e\d{1,3})?$", "", cn_folder).strip(" .")
+    if bare:
+        cands.add(_entry_key(bare))
+    if orig_name:
+        cands.add(_entry_key(orig_name))
+    return bool(cands & keys)
+
+
+_AUDIT_EVERY_ROUNDS = 10      # 每 10 轮巡检一次（监控间隔 60s → 约 10 分钟）
+_AUDIT_BATCH = 10             # 每次抽查条数（轮转覆盖全部已转存记录）
+
+
+def _audit_landed_once(store: Store, client, notifier: Notifier,
+                       offset: int, limit: int) -> None:
+    """巡检：抽查「已转存成功」的记录，文件现在还在不在目标目录里。
+
+    不在 = 被移动/删除/落到别处，这类情况只有主动对账才能发现
+    （任务状态永远是 done，数据库也记着成功）。发现就通知，不自动重转。
+    """
+    recs = [r for r in (store.history(limit=300, status="done") or [])
+            if getattr(r, "parent_id", "") and getattr(r, "cn_folder", "")]
+    if not recs:
+        return
+    start = offset % len(recs)
+    batch = [recs[(start + i) % len(recs)] for i in range(min(limit, len(recs)))]
+    lost = [r for r in batch if not _verify_landed(client, r.parent_id, r.cn_folder)]
+    if not lost:
+        return
+    names = "、".join(((r.cn_folder or "")[:16] or (r.title or "")[:16]) for r in lost[:5])
+    log.warning("落盘巡检：%d/%d 条已转存资源不在原目录: %s", len(lost), len(batch), names)
+    notifier.send("🔍 巡检发现 %d 个资源不在原目录：%s" % (len(lost), names))
 
 
 def _record_ledger(store: Store, text: str, category: str = "") -> None:
@@ -303,7 +353,9 @@ def submit_one(client: GuangyaClient, url: str, parent_id: str, max_retries: int
     last_err = ""
     rename_ok: bool | None = None
     # 中文文件夹名（不带文件后缀）：创建时先尝试指定，完成后再校验 + rename 兜底
-    cn_folder = build_cn_filename(cn_title) if cn_title else ""
+    # 电驴/磁力一集一条链接 → 集号只存在于链接里，必须双源命名（否则多集同名互相覆盖）
+    cn_folder = (build_cn_filename_from(url, cn_title) if cn_title
+                 else build_cn_filename(link_filename(url)))
     # 剧集的剧名文件夹（剧名.年份，无集数）：单集文件完成后要收进这个文件夹
     show_dir = ""
     if cn_title:
@@ -572,8 +624,10 @@ def submit_share_one(client: GuangyaClient, url: str, parent_id: str,
             cn_folder = t_folder
     # 辅助②：命名缺年份时，拿标题里的年份补上（如「小猪佩奇.S01-S12」+「(2004)」
     # → 小猪佩奇 (2004) S01-S12）；整季范围（X.S01-SNN）则把年份插到片名与范围之间。
+    # 注意必须先剥 URL：磁力大乱炖的链接堆帖没有标题文字，不剥的话 shareId
+    # 前 4 位（194148…→"1941"）会被当成 1941 年拼进命名尾巴。
     if cn_folder and title:
-        m = re.search(r"\(?(\d{4})\)?", title)
+        m = re.search(r"\(?((?:19|20)\d{2})\)?", re.sub(r"https?://\S+", " ", title))
         if m and m.group(1) not in cn_folder:
             yr = m.group(1)
             # 单集/单季签名（.SxxExx / .Sxx 词尾）：年份归剧名文件夹，文件名不再塞年份；
@@ -639,7 +693,32 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
     def handler(msg) -> None:
         for url in msg.links:
             h = link_key(url)
-            ok, reason = flt.match(msg.text)
+            # 链接即内容：同一链接（同 shareId）处理过就不再处理，换标题也一样——
+            # 转存的是分享里的真实文件，跟发帖给它起的标题无关。done/submitted 已在盘，
+            # skipped 多为已有内容或无法规范命名，重试结果不会变；只有 failed/error 才值得重试。
+            prev = store.get(h)
+            if prev and prev.status in ("done", "submitted", "skipped", "upgraded"):
+                log.info("同一链接已处理过（%s），跳过: %s", prev.status, (msg.text or url)[:44])
+                continue
+            # 分享链接先探真实名：分类、云端查重、命名统一以【分享真实内容】为准。
+            # 查重必须排在探名之后——否则同一分享换个标题就能绕过云端复查重复落盘
+            # （实测同一条分享 S&X 换「仙武传」标题又转存了一遍，内容与名字不符）。
+            cls_text = msg.text
+            if parse_share_url(url):
+                real = ""
+                try:
+                    names = client.peek_share_names(url)
+                    if names:
+                        real = names[0]
+                except Exception as exc:  # noqa: BLE001 - 探名失败退回按发帖标题
+                    log.warning("分享预览失败，退回按发帖标题: %s", exc)
+                if real:
+                    # 帖标题打头：发帖语言比发布组文件名更代表产地信号——
+                    # 琅琊榜之风的分享内文件名是「L 琅琊榜...Nirvana.in.Fire.Ⅱ.WEB-DL」，
+                    # 拉丁发布词打头会把分类拉向欧美（帖标题明明全中文）。
+                    # real 仍拼在后面参与判重与命名辅助，标题党防护不变。
+                    cls_text = msg.text + " " + real
+            ok, reason = flt.match(cls_text)
             if not ok:
                 if not store.seen(h):
                     store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
@@ -649,9 +728,9 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                 notifier.send(f"⏭️ 跳过/{reason}: {msg.text[:60]}")
                 continue
 
-            # 两级去重：本地记录 → 云端复查 → 中文规范准入
+            # 两级去重：本地记录 → 云端复查 → 中文规范准入（分享链接用真实内容判重）
             if dedup is not None:
-                d = dedup.decide(h, msg.text, store)
+                d = dedup.decide(h, cls_text, store)
                 if d.action == "reject":
                     # 落盘准入失败：做不到中文规范命名/整理归类 → 放弃这个链接
                     if not store.seen(h):
@@ -686,13 +765,15 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
             if not store.seen(h):
                 store.add(MagnetRecord(hash=h, channel=msg.channel, message_id=msg.message_id,
                                        title=msg.text[:120]))
-            target, category = pick_target(msg.text)
             if parse_share_url(url):
-                # 光鸭分享链接 → 分享转存链路（转存到自己盘后做中文命名收纳）。
+                target, category = pick_target(cls_text)
                 # 不走 max_retries：分享转存不是幂等操作，重试可能产生重复副本。
+                # 注意 cn_title 必须用原始发帖文本：cls_text 前面拼了英文真实名，
+                # 命名辅助源里混入英文段会残留数字碎片（实测落成「571玩具总动员5」）。
                 ok2, task_id, name, final_status, rename_ok, cn_folder = submit_share_one(
                     client, url, target, cn_title=msg.text)
             else:
+                target, category = pick_target(msg.text)
                 ok2, task_id, name, final_status, rename_ok, cn_folder = submit_one(
                     client, url, target, max_retries, cn_title=msg.text)
             if ok2:
@@ -702,8 +783,17 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
                              task_id=task_id, category=category,
                              parent_id=target, cn_folder=cn_folder,
                              renamed=renamed)
+                # 新资源已进目录 → 该目录的查重缓存即刻失效，防止同批后续链接漏判
+                if dedup is not None:
+                    dedup.invalidate_dir(target)
                 # 真正落盘成功 → 记内容账本（后续同片不同磁力也能认出来）
                 if final_status == "done":
+                    # 落盘校验：任务状态 done ≠ 文件真在目标目录里
+                    if not _verify_landed(client, target, cn_folder, name):
+                        log.warning("⚠️ 落盘校验失败：%s 不在「%s」目录（任务 %s）",
+                                    cn_folder or name, category or "目标", task_id)
+                        notifier.send("⚠️ 落盘异常：%s 转存后不在「%s」里（可能已被移动或删除）"
+                                      % ((cn_folder or name)[:30], category or "目标目录"))
                     _record_ledger(store, msg.text, category)
                 parsed = parse_title(msg.text)
                 where = f"→ {category}" if category else ""
@@ -735,7 +825,12 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
     解决「提交后任务实际失败但状态仍为 submitted」的问题——
     主流程 submit_one 会等待（最多 180s），但超时的任务仍留在 submitted 状态，
     此监控线程会持续检查直到它们进入 done/failed。
+
+    另外每 _AUDIT_EVERY_ROUNDS 轮做一次落盘巡检（见 _audit_landed_once）。
     """
+    rounds = [0]
+    cursor = [0]
+
     def _loop() -> None:
         while True:
             try:
@@ -802,6 +897,15 @@ def start_task_monitor(store: Store, client: GuangyaClient, notifier: Notifier) 
                     log.info("任务状态监控更新 %d 条记录", updated)
             except Exception as exc:
                 log.warning("任务监控循环异常: %s", exc)
+
+            # 落盘巡检：数据库记 done 的资源，现在还在不在盘里（轮转抽查，避免刷接口）
+            rounds[0] += 1
+            if rounds[0] % _AUDIT_EVERY_ROUNDS == 0:
+                try:
+                    _audit_landed_once(store, client, notifier, cursor[0], _AUDIT_BATCH)
+                    cursor[0] += _AUDIT_BATCH
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("落盘巡检异常: %s", exc)
             time.sleep(_TASK_MONITOR_INTERVAL)
 
     t = threading.Thread(target=_loop, daemon=True, name="task_monitor")
@@ -1032,6 +1136,7 @@ def run_userbot(cfg: AppConfig, handler) -> None:
         cfg.telegram.api_id, cfg.telegram.api_hash,
         cfg.telegram.session, cfg.source.channels,
         proxy=cfg.source.proxy, comments=cfg.source.comments,
+        history_pages=cfg.history_pages if cfg.scan_history else 0,
     )
     src.on_message(handler)
     src.run()

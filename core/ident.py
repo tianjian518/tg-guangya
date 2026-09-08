@@ -391,6 +391,20 @@ def _camel_prefixes(s: str) -> list[str]:
     return [s[:i] for i in reversed(idx) if 0 < i < len(s)]
 
 
+def _decamel(s: str) -> str:
+    """驼峰粘连拆词：KPopDemonHunters → KPop Demon Hunters、CangFeng → Cang Feng。
+
+    _KEEP 摘字符时把空格/点号全丢掉，纯拉丁片名会粘成一坨。按两种边界
+    插回空格：小写/数字→大写（Story5→Story 5 不对，是 y→S 这类）、
+    大写→大写+小写（KPop→K Pop 这类）。查 TMDB 前的归一化会去空格，
+    所以这里主要价值是查询词更像人写的 + 翻译失败时保留可读英文名。
+    """
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", s or "")
+    s = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", s)
+    s = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", s)
+    return re.sub(r"\s{2,}", " ", s).strip()
+
+
 def _lookup_en(core: str, year: int = 0) -> tuple[str, str, int]:
     """查英文片名的中文译名与地区码，返回 (译名, 地区码, TMDB年份)。
 
@@ -407,6 +421,9 @@ def _lookup_en(core: str, year: int = 0) -> tuple[str, str, int]:
         q = _EN_PART.sub("", q).strip()
         if not q:
             q = core
+        # 查询词收尾的孤立字母是技术词残渣（"Toy Story 5 iT"→…"5 i"）：
+        # 不剥掉它，尾数字补号匹配（\s\d+$）会失效，TMDB 查询词也被污染
+        q = re.sub(r"\s+[A-Za-z]$", "", q).strip()
         meta = media_meta.lookup(q, year)
         # 整串查不到 → 按驼峰边界砍掉尾部标签再试（OppenheimerEnglish → Oppenheimer）
         if not meta.cn_name:
@@ -415,6 +432,14 @@ def _lookup_en(core: str, year: int = 0) -> tuple[str, str, int]:
                 if m2.cn_name:
                     meta = m2
                     break
+        # 系列号补回：查询词尾部带个位/十位数字（Toy Story 5 / John Wick 4）、
+        # TMDB 中文标题却常不带（"玩具总动员"）→ 对照原始英文名，原名含该数字
+        # 才补（Ocean's Eleven 原名无 11，就不会错拼成「十一罗汉 11」）。
+        if meta.cn_name:
+            mn = re.search(r"\s(\d{1,2})$", q.strip())
+            if (mn and mn.group(1) not in meta.cn_name
+                    and mn.group(1) in (meta.orig_name or "")):
+                meta.cn_name = f"{meta.cn_name} {mn.group(1)}"
         return meta.cn_name, meta.region, meta.year
     except Exception:
         return "", "", 0
@@ -502,6 +527,14 @@ def analyze(title: str) -> ResourceInfo:
     meta_region = ""
     if not re.search(r"[一-鿿]", info.core or ""):
         info.core = _strip_noise(info.core, strip_trailing_nums=True)
+        # 纯拉丁片名常粘着压制组缩写收尾（CangFengNB / ToyStory5iTQH）：
+        # _KEEP 剥点后全粘成一坨，发布组白名单列不全就漏网。两种尾巴分开剥：
+        # 数字后的字母团（5iTQH→5）与尾部 2~5 位大写团（NB/HQL），再按驼峰
+        # 边界拆回可读形式（TMDB 命中率也更高）。
+        core_trim = re.sub(r"(?<=\d)[A-Za-z]{1,6}$|[A-Z]{2,5}$", "", info.core).strip()
+        if len(core_trim) >= 4:
+            info.core = core_trim
+        info.core = _decamel(info.core)
         translated, meta_region, tmdb_year = _lookup_en(info.core, info.year)
         if translated:
             info.core = translated

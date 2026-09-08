@@ -583,12 +583,14 @@ def _build_userbot_source() -> UserbotSource:
 def userbot_status():
     if not cfg.telegram.api_id or not cfg.telegram.api_hash:
         return {"logged_in": False, "error": "请先在设置里填写 api_id / api_hash"}
-    src = _build_userbot_source()
+    # 不再真连 Telethon 检测：worker 与本接口共用同一 session/auth_key，
+    # 并发连接会被 Telegram 拒绝 RPC（GetState 失败 6 次直接崩 worker）。
+    # 登录成功后 session 文件才存在，logout 会删它——文件在即视为已登录。
     try:
-        authed = _ub_run(src.is_authorized())
-    except Exception as exc:
-        return {"logged_in": False, "error": str(exc)}
-    return {"logged_in": bool(authed)}
+        p = Path(cfg.telegram.session)
+        return {"logged_in": p.exists() and p.stat().st_size > 0}
+    except Exception:
+        return {"logged_in": False}
 
 
 @app.post("/api/userbot/login/start")
@@ -937,6 +939,7 @@ def _start_worker() -> bool:
         raise HTTPException(status_code=401, detail="请先登录光鸭账号再启动监听")
     logf = open(WORKER_LOG, "ab", buffering=0)
     env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"  # stderr 重定向到文件是全缓冲，不设这个日志会闷住
     proc = subprocess.Popen(
         [sys.executable, str(BASE / "main.py"), "--config", str(CONFIG_PATH)],
         cwd=str(BASE), stdout=logf, stderr=logf, env=env,

@@ -43,7 +43,7 @@ MAGNET_RE = re.compile(r"magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}[^\s\"'<>）】]
 
 
 class ChannelDiscovery:
-    MAX_CHANNELS = 50  # 自动发现上限，防止死频道撑爆轮询
+    MAX_CHANNELS = 400  # 自动发现上限（用户要求频道越多越好；源里约 415 个）
     def __init__(
         self,
         seed_urls: Iterable[str] | None = None,
@@ -52,7 +52,9 @@ class ChannelDiscovery:
         timeout: int = 25,
         proxy: str = "",
         verify_threshold: int = 1,
+        max_channels: int = 0,
     ) -> None:
+        self.max_channels = int(max_channels or 0) or self.MAX_CHANNELS
         self.seed_urls = [str(u).strip() for u in (seed_urls or []) if u]
         self.seed_file = seed_file
         self.interval = max(1.0, float(interval_hours)) * 3600
@@ -114,11 +116,11 @@ class ChannelDiscovery:
         existing_known = self.known & found
         auto_new = {n for n in found if n not in self.known and n not in seed_names}
         # 按字母序排序，取上限内的自动发现频道
-        capped = sorted(auto_new)[:max(0, self.MAX_CHANNELS - len(existing_known))]
+        capped = sorted(auto_new)[:max(0, self.max_channels - len(existing_known))]
         new = seed_names | existing_known | set(capped)
         if len(capped) < len(auto_new):
             log.info("自动发现已截断：发现 %d 个，上限 %d 个（保留种子频道 %d 个）",
-                     len(auto_new), self.MAX_CHANNELS, len(seed_names))
+                     len(auto_new), self.max_channels, len(seed_names))
         return new
 
     def verify_channels(self, channels: Iterable[str], pages: int = 1,

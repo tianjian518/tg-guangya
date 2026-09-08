@@ -43,9 +43,9 @@ def test_all_years_stripped():
     # 完整链路里，任何年份都不能残留在 core 中。
     # 用字典查不到的片名，避免翻译把 core 变成中文而掩盖年份粘连问题。
     cases = {
-        "Some.Movie.Name.1998.2024.Remastered": "SomeMovieName",
+        "Some.Movie.Name.1998.2024.Remastered": "Some Movie Name",
         "Show.2010.2021.Complete": "Show",
-        "Indie.Film.2005.2099.1080p": "IndieFilm",
+        "Indie.Film.2005.2099.1080p": "Indie Film",
     }
     for raw, core in cases.items():
         got = analyze(raw).core
@@ -71,7 +71,8 @@ def test_english_patient_not_damaged():
     # 《The English Patient》（英伦病人）片名里就有 English，
     # camel 兜底绝不能把它当噪声剥掉导致翻译错乱。这里只要保留原片名（不被破坏）即可。
     got = analyze("The English Patient 1996 1080p").folder
-    assert "EnglishPatient" in got, f"《The English Patient》被误伤：folder={got!r}"
+    # 剥点后不再粘连成 EnglishPatient：驼峰拆词让译名失败时也保持可读
+    assert "English Patient" in got, f"《The English Patient》被误伤：folder={got!r}"
     print(f"  OK The English Patient → {got!r}（未被破坏）")
 
 
