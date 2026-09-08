@@ -314,6 +314,8 @@ class ResourceInfo:
     - key:    账本主键（folder 的小写字母数字形），云端/本地查重都用它
     - region_hint: 地区提示（由 core 语言特征自动推断），供分类器优先使用。
                    非空时分类器直接采信，绕过原始标题的语言推断规则。
+    - kind_hint:   内容形态提示（documentary/variety，来自 TMDB genre）。
+                   《舌尖上的中国》标题无任何类型词，靠它才能判进纪录片。
     """
     title: str = ""
     core: str = ""
@@ -324,6 +326,7 @@ class ResourceInfo:
     key: str = ""
     region_hint: str = ""   # "cn" / "jpkr" / "west" / ""（空=无提示）
     region_hint_strong: bool = False  # True=来自片名库/TMDB（权威），False=原标题语言推断
+    kind_hint: str = ""     # "documentary" / "variety" / ""（空=无提示，仅 TMDB 命中时给出）
 
 
 def _norm(s: str) -> str:
@@ -511,8 +514,9 @@ def analyze(title: str) -> ResourceInfo:
         # 按中文名查 TMDB 拿 original_language 折算地区，否则会误判华语。
         # 查询前对 core 再剥一遍进度词：防未来 _PROGRESS 未覆盖的新追更写法
         # 残留进查询词，TMDB 模糊搜索命中错误条目（早春晴朗更新至17 → 欧美剧 的教训）。
-        meta_region, tmdb_year = media_meta.region_year_of(
+        meta_region, tmdb_year, meta_kind = media_meta.region_year_kind_of(
             _PROGRESS.sub(" ", info.core), info.year, is_tv=bool(info.sig))
+        info.kind_hint = meta_kind
         # 同上：标题无年份时用 TMDB 首播/上映年份回填（仙逆→仙逆 (2023)）
         if not info.year and tmdb_year:
             info.year = tmdb_year

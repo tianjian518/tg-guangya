@@ -422,7 +422,8 @@ class CloudDedup:
                 # region_hint 由 ident 根据 core 语言特征推断，优先级高于原始标题的语言推断。
                 cr = self.classifier.classify(title, extra=info.folder,
                                               region_hint=info.region_hint,
-                                              region_hint_strong=info.region_hint_strong)
+                                              region_hint_strong=info.region_hint_strong,
+                                              kind_hint=info.kind_hint)
                 cat = cr.category
             except Exception:  # noqa: BLE001
                 cr = None

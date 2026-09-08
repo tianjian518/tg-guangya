@@ -80,7 +80,8 @@ def pick_category(title: str, classifier: Classifier, resolver: CategoryResolver
     info = ident_analyze(title)
     cr = classifier.classify(title, extra=info.folder,
                              region_hint=info.region_hint,
-                             region_hint_strong=info.region_hint_strong)
+                             region_hint_strong=info.region_hint_strong,
+                             kind_hint=info.kind_hint)
     target, path = resolver.resolve(cr.category)
     return {
         "category": cr.category,

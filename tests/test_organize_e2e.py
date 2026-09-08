@@ -88,7 +88,8 @@ def test_organize_e2e():
             info = _ident_analyze(msg.text)
             cr = clf.classify(msg.text, extra=info.folder,
                              region_hint=info.region_hint,
-                             region_hint_strong=info.region_hint_strong)
+                             region_hint_strong=info.region_hint_strong,
+                             kind_hint=info.kind_hint)
             target, path = resolver.resolve(cr.category)
             task_id, _ = client.create_offline_task(url, target)
             store.update(key, status="submitted", task_id=task_id, category=path)

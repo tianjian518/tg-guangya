@@ -1709,9 +1709,33 @@ def _first_tmdb_result(data: dict) -> Optional[dict]:
             "orig_name": (r.get("original_title") or r.get("original_name") or "").strip(),
             "original_language": (r.get("original_language") or "").strip(),
             "year": int(((r.get("release_date") or r.get("first_air_date") or "")[:4] or 0) or 0),
+            # genre_ids 必须带回：99=纪录片 / 10764=真人秀 / 10767=脱口秀。
+            # 《舌尖上的中国》这类「无类型词」的资源就靠它判纪录片，
+            # 丢掉这个字段 = 分类器永远只能靠标题猜类型（旧版缺陷）。
+            "genre_ids": [int(g) for g in (r.get("genre_ids") or []) if g is not None],
             "source": "tmdb",
         }
     return None
+
+
+# TMDB genre_id → 本项目内容形态（KIND_*）。只映射有把握的：
+# 99 纪录片（movie/tv 通用）；10764 真人秀 / 10767 脱口秀（TV 专属）。
+# 其余类型（动画 16、剧情 18…）不映射——分类器现有的标题规则已足够，
+# 硬映射反而会把动画电影拽离电影目录，扩大改动面。
+_GENRE_KIND: dict[int, str] = {
+    99: "documentary",
+    10764: "variety",
+    10767: "variety",
+}
+
+
+def _genre_to_kind(genre_ids: list) -> str:
+    """TMDB genre_ids → 内容形态提示。命中多个时按 _GENRE_KIND 表序取第一个。"""
+    for g in genre_ids or []:
+        kind = _GENRE_KIND.get(int(g))
+        if kind:
+            return kind
+    return ""
 
 
 def _tmdb_lookup(query: str, year: int = 0, kinds: tuple = ("movie", "tv"),
@@ -1860,13 +1884,27 @@ def region_year_of(title: str, year: int = 0, is_tv: bool = False) -> tuple[str,
     :param is_tv: 标题带季/集号 → 只搜 tv，避免 movie 模糊搜索撞同名错片。
     年份只在「名字完全对得上」时才回填（exact_first），查不到返回 ("", 0)。
     """
+    region, tmdb_year, _kind = region_year_kind_of(title, year, is_tv=is_tv)
+    return region, tmdb_year
+
+
+def region_year_kind_of(title: str, year: int = 0, is_tv: bool = False) -> tuple[str, int, str]:
+    """同 region_year_of，再把 TMDB 条目的类型一起带回来。
+
+    返回 (地区码, 年份, kind_hint)。kind_hint 只在命中纪录片/综艺这类
+    「有把握的 genre」时非空（见 _GENRE_KIND），空串表示无类型提示。
+    《舌尖上的中国》的纪录片身份就来自这里——标题里没有任何类型词，
+    TMDB 条目 genre 99 是唯一可靠的判定依据。
+    """
     if not title or not _tmdb_key():
-        return "", 0
+        return "", 0, ""
     kinds = ("tv",) if is_tv else ("movie", "tv")
     tm = _tmdb_lookup(title, year, kinds=kinds, exact_first=True)
     if tm:
-        return language_to_region(tm.get("original_language", "")), int(tm.get("year") or 0)
-    return "", 0
+        return (language_to_region(tm.get("original_language", "")),
+                int(tm.get("year") or 0),
+                _genre_to_kind(tm.get("genre_ids") or []))
+    return "", 0, ""
 
 
 def translate(title: str, year: int = 0) -> str:

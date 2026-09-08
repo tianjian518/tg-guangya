@@ -185,10 +185,84 @@ def test_progress_bare_number_strip():
     print("  OK core/folder 剥净、TMDB 查询词干净、zh→国产剧；旧带集字形态不受影响")
 
 
+def test_tmdb_kind_hint():
+    """TMDB genre → 内容形态：纪录片/综艺不该再因「标题无类型词」落错目录。
+
+    复现「舌尖上的中国（纪录片）→ 华语电影」缺陷：分享卡片场景分类早于
+    命名，链接文本无任何类型信号 → 兜底判电影；而 TMDB 条目 genre 99
+    （纪录片）此前被 _first_tmdb_result 丢弃。现在 genre 一路带回：
+    _first_tmdb_result.genre_ids → _genre_to_kind → region_year_kind_of
+    → analyze.kind_hint → classify(kind_hint=…) → 纪录片目录。
+    """
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from unittest import mock
+
+    from core import media_meta as mm
+    from core.classifier import Classifier
+    from core.ident import analyze
+
+    print("\n=== TMDB genre → kind_hint（舌尖上的中国缺陷）===")
+
+    def fake_lookup(q, year=0, kinds=("movie", "tv"), exact_first=False):
+        return {"cn_name": "舌尖上的中国", "orig_name": "舌尖上的中国",
+                "original_language": "zh", "year": 2012, "genre_ids": [18, 99]}
+
+    with mock.patch.object(mm, "_tmdb_key", lambda: "fake-key"), \
+         mock.patch.object(mm, "_tmdb_lookup", fake_lookup):
+        # ① analyze 链路：分享卡片「影名：」标题 → kind_hint=documentary
+        a = analyze("影名：舌尖上的中国 1080p 全集")
+        assert a.core == "舌尖上的中国", f"core={a.core!r}"
+        assert a.kind_hint == "documentary", (
+            f"TMDB genre 99 应给出 kind_hint=documentary，实际 {a.kind_hint!r}")
+        assert a.region_hint == "cn" and a.region_hint_strong
+
+        # ② 全链路（与 main.pick_target 同接线）：纪录片条目不再落 华语电影
+        _, clf, resolver, _ = build_resolver()
+        got = pick_category("影名：舌尖上的中国 1080p 全集", clf, resolver)
+        assert got["category"] == "纪录片", (
+            f"纪录片应落 纪录片，实际 {got['category']!r}（signals 见 classify 返回）")
+
+        # ③ 带集数写法同样守住：「全7集」的 tv 信号(3) 压不过 TMDB 纪录片(5)
+        r = Classifier().classify("舌尖上的中国 第一季 全7集 1080p",
+                                  extra="舌尖上的中国 (2012)",
+                                  region_hint="cn", region_hint_strong=True,
+                                  kind_hint="documentary")
+        assert r.category == "纪录片", f"带集数仍应是纪录片，实际 {r.category!r} {r.signals}"
+
+    # ④ 综艺 genre：10764 真人秀 → variety → 综艺目录
+    def fake_variety(q, year=0, kinds=("movie", "tv"), exact_first=False):
+        return {"cn_name": "某综艺", "original_language": "zh",
+                "year": 2025, "genre_ids": [10764]}
+    with mock.patch.object(mm, "_tmdb_key", lambda: "fake-key"), \
+         mock.patch.object(mm, "_tmdb_lookup", fake_variety):
+        av = analyze("某综艺 第3期 1080p")
+        assert av.kind_hint == "variety", f"genre 10764 应给 variety，实际 {av.kind_hint!r}"
+        rv = Classifier().classify(av.title, extra=av.folder,
+                                   region_hint=av.region_hint,
+                                   region_hint_strong=av.region_hint_strong,
+                                   kind_hint=av.kind_hint)
+        assert rv.category == "综艺", f"综艺应落 综艺，实际 {rv.category!r}"
+
+    # ⑤ 兼容：mock 条目无 genre_ids（旧缓存/旧用例形态）→ kind_hint 为空，行为不变
+    def fake_plain(q, year=0, kinds=("movie", "tv"), exact_first=False):
+        return {"cn_name": "早春晴朗", "original_language": "zh", "year": 2026}
+    with mock.patch.object(mm, "_tmdb_key", lambda: "fake-key"), \
+         mock.patch.object(mm, "_tmdb_lookup", fake_plain):
+        assert analyze("早春晴朗更新至17").kind_hint == "", "无 genre_ids 应给空提示"
+
+    # ⑥ 无 kind_hint 时行为完全不变（回归护栏）
+    r6 = Classifier().classify("舌尖上的中国 1080p 高清")
+    assert r6.category == "华语电影", f"无提示应维持旧行为 华语电影，实际 {r6.category!r}"
+    print("  OK genre99→纪录片 / genre10764→综艺 / 无genre兼容 / 无提示行为不变")
+
+
 if __name__ == "__main__":
     test_phrase_region_cn()
     test_phrase_region_jpkr()
     test_chinese_title_always_cn()
     test_chinese_title_tmdb_region()
     test_progress_bare_number_strip()
+    test_tmdb_kind_hint()
     print("\n==== 短语地区识别：全部通过 ✅")

@@ -158,6 +158,9 @@ _HINT_WEIGHT_WEAK = 2
 
 # 形态打平时按规则表顺序裁决：专有类型（纪录片/演唱会/综艺/动漫）优先于
 # 通用类型（剧集/电影）——和 _SPECIFIC_KIND_RULES 的编写顺序保持一致。
+# kind_hint（TMDB genre，权威事实）的权重：压过「全集/第X集」(3) 与
+# 「年份+1080p」(3) 的标题信号——纪录片剧不会因为带了集数词就变剧集。
+_KIND_HINT_WEIGHT = 5
 _KIND_PRIORITY = tuple(
     dict.fromkeys(t for _, t, _ in _SPECIFIC_KIND_RULES + _MOVIE_RULES)
 )
@@ -246,7 +249,7 @@ class Classifier:
 
     # ---------- 主入口 ----------
     def classify(self, title: str, extra: str = "", region_hint: str = "",
-                 region_hint_strong: bool = False) -> ClassifyResult:
+                 region_hint_strong: bool = False, kind_hint: str = "") -> ClassifyResult:
         """判定分类。
 
         :param title:     原始频道标题（保留栏目前缀、语言标签、英文原名——
@@ -255,6 +258,9 @@ class Classifier:
         :param region_hint: 地区提示（cn / jpkr / west / other）
         :param region_hint_strong: 提示是否来自权威数据（本地字典登记表 /
                           TMDB 的 original_language）。强提示权重压过标题标签。
+        :param kind_hint: 内容形态提示（documentary / variety，来自 TMDB genre）。
+                          权重 5，压过标题里的「全集/第X集」（剧集 3 分）——
+                          《舌尖上的中国 全7集》的 tv 信号不该压过纪录片事实。
 
         地区判定按**打分制**，最后取最高分；打平时按 _REGION_PRIORITY 裁决：
           1. ident 强地区提示（字典登记表 / TMDB original_language）  权重 5
@@ -276,10 +282,13 @@ class Classifier:
         if not text.strip():
             return self._unknown("空标题")
 
-        # 形态：先判专有类型（纪录片/演唱会/综艺/动漫/剧集），都没命中再按电影兜底
-        kind, kind_score, kind_sig = self._score(self.kind_rules, text)
+        # 形态：先判专有类型（纪录片/演唱会/综艺/动漫/剧集），都没命中再按电影兜底。
+        # kind_hint（TMDB genre）直接加进打分表参与竞争：它是权威事实，
+        # 权重 5 能同时压过剧集(3)/电影(2)的标题信号，但不会越过
+        # 「标题明说纪录片/演唱会」的同分裁决（此时两者相加，方向一致）。
+        kind, kind_score, kind_sig = self._score(self.kind_rules, text, kind_hint)
         if not kind:
-            kind, kind_score, kind_sig = self._score(self.movie_rules, text)
+            kind, kind_score, kind_sig = self._score(self.movie_rules, text, kind_hint)
 
         region_scores, region_sig = self._score_detail(self.region_rules, text)
         signals = list(kind_sig) + list(region_sig)
@@ -384,8 +393,11 @@ class Classifier:
         key, val = min(scores.items(), key=rank)
         return key, val
 
-    def _score(self, rules, text: str) -> tuple[str, int, list[str]]:
+    def _score(self, rules, text: str, hint: str = "") -> tuple[str, int, list[str]]:
         scores, signals = self._score_detail(rules, text)
+        if hint and hint in KIND_NAMES:
+            scores[hint] = scores.get(hint, 0) + _KIND_HINT_WEIGHT
+            signals.append(f"TMDB类型→{KIND_NAMES[hint]}")
         key, val = self._best(scores, _KIND_PRIORITY)
         return key, val, signals
 

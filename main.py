@@ -621,12 +621,15 @@ def make_handler(store: Store, client: GuangyaClient, flt: KeywordFilter,
             extra = info.folder
             region_hint = info.region_hint
             region_hint_strong = info.region_hint_strong
+            kind_hint = info.kind_hint
         except Exception:  # noqa: BLE001 - 命名失败不影响分类，退回只用原标题
             extra = ""
             region_hint = ""
             region_hint_strong = False
+            kind_hint = ""
         cr = classifier.classify(text, extra=extra, region_hint=region_hint,
-                                 region_hint_strong=region_hint_strong)
+                                 region_hint_strong=region_hint_strong,
+                                 kind_hint=kind_hint)
         target, path = resolver.resolve(cr.category)
         log.info("分类: %s → %s（%s/%s，置信度 %.0f%%）",
                  text[:34], path or "根目录", cr.kind_name, cr.region_name,
