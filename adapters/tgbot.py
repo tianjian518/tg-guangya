@@ -287,8 +287,15 @@ class TgBot:
             for i in range(0, len(text), 3500):
                 self._bot.send_message(chat_id, text[i:i + 3500],
                                        disable_web_page_preview=True)
-        except Exception as exc:  # noqa: BLE001 - 单条发送失败不应影响主流程
-            log.warning("TG 发送失败: %s", exc)
+        except Exception:
+            # Markdown 解析失败（光鸭链接里的下划线被当成斜体标记）→ 纯文本重发
+            try:
+                for i in range(0, len(text), 3500):
+                    self._bot.send_message(chat_id, text[i:i + 3500],
+                                           parse_mode=None,
+                                           disable_web_page_preview=True)
+            except Exception as exc:  # noqa: BLE001 - 单条发送失败不应影响主流程
+                log.warning("TG 发送失败: %s", exc)
 
     def notify(self, text: str) -> None:
         """把转存结果推送给所有管理员（供 Notifier 回调使用）。"""
