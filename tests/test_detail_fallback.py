@@ -33,7 +33,9 @@ class FakeSession:
         self.pages = pages          # {url片段: (status, html)}
         self.requested: list[str] = []
 
-    def get(self, url, params=None, timeout=0):
+    def get(self, url, params=None, timeout=0, allow_redirects=True):
+        # allow_redirects：fetch 对 /s/ 页显式禁用跟随（受限频道 302 点破），
+        # mock 签名要与 requests.Session.get 对齐，否则 TypeError。
         self.requested.append(url)
         for key, (status, html) in self.pages.items():
             if key in url:

@@ -133,11 +133,24 @@ class WebScraper:
         """
         url = f"https://t.me/s/{channel}"
         params = {"before": before} if before else None
-        resp = self._session.get(url, params=params, timeout=self.timeout)
+        resp = self._session.get(url, params=params, timeout=self.timeout,
+                                 allow_redirects=False)
+        if resp.status_code in (301, 302, 303, 307, 308):
+            # 受限频道的典型表现：/s/ 页 302 到无消息的 View 预览页
+            # （App 内可能仍可见）。跟过去只会拿到 0 条 + 「页面 200 但全空」
+            # 的假象，不如直接点破受限这个事实。
+            log.warning("频道 %s 网页版被 t.me 重定向（HTTP %s → 很可能受限），视为无响应",
+                        channel, resp.status_code)
+            return []
         if resp.status_code != 200:
             log.warning("抓取 %s 失败: HTTP %s", channel, resp.status_code)
             return []
         messages = self._parse_html(channel, resp.text)
+        if not messages:
+            # 200 但 0 条：正常频道即使没新消息也会展示最近历史，全空说明异常。
+            # 必须留日志，否则表现为「静默无响应」，和被墙混在一起难排查。
+            log.info("频道 %s 页面 200 但 0 条消息（网页版受限或未更新）", channel)
+            return []
         budget = max(0, int(detail_fallback or 0))
         for m in messages:
             if m.links or budget <= 0:
@@ -245,6 +258,15 @@ class WebScraper:
                 time.sleep(2)
             round_num += 1
             processed = 0
+            # 冷却复活：被剔频道每轮衰减 1 次失败计数，降回阈值内自动重试。
+            # 无响应可能是暂时的（网络抖动、t.me 风控波动），永久剔除会把
+            # 频道钉死到进程重启——实测发生过「网络恢复但频道再也回不来」。
+            # 衰减一轮扣 1 次：阈值 3 时被剔频道约 3 轮（6 分钟）后自动复活。
+            if failures:
+                failures = {
+                    c: (v - 1 if v >= max_consecutive_failures else v)
+                    for c, v in failures.items()
+                }
             active_channels = [c for c in self.channels if failures.get(c, 0) < max_consecutive_failures]
             if len(active_channels) != len(self.channels):
                 log.info(
